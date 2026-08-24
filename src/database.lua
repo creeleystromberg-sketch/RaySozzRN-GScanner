@@ -15,7 +15,8 @@ Database.Materials = {
 Database.EnvironmentBlacklist = {
     "quest", "board", "shop", "store", "merchant", "stella", "jake",
     "bank", "cauldron", "altar", "portal", "teleport", "leaderboard",
-    "turret", "clover", "four leaf", "luck buff"
+    "turret", "clover", "four leaf", "luck buff", "offer", "required",
+    "requires", "submit", "sacrifice"
 }
 
 function Database.Match(text)

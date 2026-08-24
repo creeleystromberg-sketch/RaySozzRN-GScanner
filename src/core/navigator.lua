@@ -1,11 +1,8 @@
 local PathfindingService = game:GetService("PathfindingService")
-local Players = game:GetService("Players")
 
 local Navigator = {}
-local player = Players.LocalPlayer
 local currentToken = 0
 local isRunning = false
-local currentTarget = nil
 local Movement, Config
 local onStatusCallback = nil
 
@@ -26,91 +23,171 @@ local function isActive(token)
     return token == currentToken and isRunning
 end
 
-local function withinReach(root, targetPart, reachDistance)
-    return (root.Position - targetPart.Position).Magnitude <= reachDistance
+local function distanceToTarget(root, targetPart)
+    return (root.Position - targetPart.Position).Magnitude
 end
 
-local function moveUntilReached(token, destination, targetPart, reachDistance, timeout, statusText)
+local function moveToWaypoint(token, waypoint, waypointIndex, waypointCount, targetPart, reachDistance, isPathBlocked)
     local root = Movement.GetRoot()
     local humanoid = Movement.GetHumanoid()
-    if not root or not humanoid then return false end
+    if not root or not humanoid then return "failed" end
 
-    humanoid:MoveTo(destination)
+    humanoid.AutoRotate = true
+    humanoid:MoveTo(waypoint.Position)
+
     local startedAt = os.clock()
     local lastProgressAt = startedAt
     local lastPosition = root.Position
     local lastJumpTime = 0
+    local recoveryJumps = 0
+    local waypointJumpPending = waypoint.Action == Enum.PathWaypointAction.Jump
 
-    while os.clock() - startedAt < timeout do
-        if not isActive(token) or not targetPart.Parent then return false end
-        if not root.Parent or humanoid.Health <= 0 then return false end
-        if withinReach(root, targetPart, reachDistance) then return true end
+    while os.clock() - startedAt < (Config.WaypointTimeout or 3.2) do
+        if not isActive(token) or not targetPart.Parent then return "cancelled" end
+        if not root.Parent or humanoid.Health <= 0 then return "failed" end
+        if distanceToTarget(root, targetPart) <= reachDistance then return "target" end
+        if isPathBlocked(waypointIndex) then return "repath" end
 
-        if destination.Y - root.Position.Y > 1.3 or Movement.IsObstacleAhead(destination) then
-            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+        local flatOffset = Vector3.new(
+            waypoint.Position.X - root.Position.X,
+            0,
+            waypoint.Position.Z - root.Position.Z
+        )
+        if flatOffset.Magnitude <= 2.0 and math.abs(waypoint.Position.Y - root.Position.Y) <= 4.0 then
+            return "waypoint"
         end
 
-        if (root.Position - lastPosition).Magnitude >= 0.5 then
+        local obstacleAhead = Movement.IsObstacleAhead(waypoint.Position)
+        if waypointJumpPending
+            or waypoint.Position.Y - root.Position.Y > 1.3
+            or obstacleAhead then
+            local jumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            if waypointJumpPending and jumpTime ~= lastJumpTime then waypointJumpPending = false end
+            lastJumpTime = jumpTime
+        end
+
+        if (root.Position - lastPosition).Magnitude >= 0.45 then
             lastPosition = root.Position
             lastProgressAt = os.clock()
+            recoveryJumps = 0
         elseif os.clock() - lastProgressAt > 0.8 then
-            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
-            humanoid:MoveTo(destination)
+            local jumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            if jumpTime ~= lastJumpTime then recoveryJumps += 1 end
+            lastJumpTime = jumpTime
+            humanoid:MoveTo(waypoint.Position)
             lastProgressAt = os.clock()
+
+            if recoveryJumps >= 2 then return "repath" end
         end
 
-        notifyStatus(statusText, math.floor((root.Position - targetPart.Position).Magnitude) .. " studs left")
+        notifyStatus(
+            "AI: Walking " .. waypointIndex .. "/" .. waypointCount,
+            math.floor(distanceToTarget(root, targetPart)) .. " studs left",
+            obstacleAhead and "Obstacle detected; jumping." or "Path clear."
+        )
         task.wait(0.05)
     end
 
-    return withinReach(root, targetPart, reachDistance)
+    return "repath"
 end
 
-local function followPath(token, waypoints, targetPart, reachDistance)
+local function followPath(token, path, targetPart, reachDistance)
+    local waypoints = path:GetWaypoints()
+    if #waypoints < 2 then return false end
+
+    local blockedWaypoint = nil
+    local blockedConnection = path.Blocked:Connect(function(index)
+        blockedWaypoint = blockedWaypoint and math.min(blockedWaypoint, index) or index
+    end)
+
+    local function pathIsBlocked(currentIndex)
+        return blockedWaypoint ~= nil and blockedWaypoint >= currentIndex
+    end
+
     for index = 2, #waypoints do
-        if not isActive(token) or not targetPart.Parent then return false end
-        local root = Movement.GetRoot()
-        if not root then return false end
-
-        local waypoint = waypoints[index]
-        if waypoint.Action == Enum.PathWaypointAction.Jump
-            or waypoint.Position.Y - root.Position.Y > 1.3
-            or Movement.IsObstacleAhead(waypoint.Position) then
-            Movement.TryGroundedJump(0.8, 0)
-        end
-
-        if moveUntilReached(
+        local result = moveToWaypoint(
             token,
-            waypoint.Position,
+            waypoints[index],
+            index,
+            #waypoints,
             targetPart,
             reachDistance,
-            Config.WaypointTimeout or 3.2,
-            "AI: Waypoint " .. index .. "/" .. #waypoints
-        ) then
+            pathIsBlocked
+        )
+
+        if result == "target" then
+            blockedConnection:Disconnect()
             return true
+        end
+        if result ~= "waypoint" then
+            blockedConnection:Disconnect()
+            return false
         end
     end
 
+    blockedConnection:Disconnect()
     local root = Movement.GetRoot()
-    return root ~= nil and withinReach(root, targetPart, reachDistance)
+    return root ~= nil and distanceToTarget(root, targetPart) <= reachDistance
 end
 
 local function directWalk(token, targetPart, reachDistance)
-    notifyStatus("AI: Direct Walk", "Path unavailable; using ground movement.")
-    local deadline = os.clock() + 12
+    local humanoid = Movement.GetHumanoid()
+    local root = Movement.GetRoot()
+    if not humanoid or not root then return false end
+
+    notifyStatus("AI: Local avoidance", "Searching for a walkable direction.")
+    local deadline = os.clock() + 4.0
+    local lastProgressAt = os.clock()
+    local bestDistance = distanceToTarget(root, targetPart)
+    local lastJumpTime = 0
 
     while os.clock() < deadline do
         if not isActive(token) or not targetPart.Parent then return false end
-        local root = Movement.GetRoot()
-        if not root then return false end
-        if withinReach(root, targetPart, reachDistance) then return true end
+        if not root.Parent or humanoid.Health <= 0 then return false end
 
-        if moveUntilReached(token, targetPart.Position, targetPart, reachDistance, 1.0, "AI: Direct Walk") then
-            return true
+        local currentDistance = distanceToTarget(root, targetPart)
+        if currentDistance <= reachDistance then return true end
+        if currentDistance < bestDistance - 0.5 then
+            bestDistance = currentDistance
+            lastProgressAt = os.clock()
+        elseif os.clock() - lastProgressAt > 1.2 then
+            return false
         end
+
+        local obstacleAhead = Movement.IsObstacleAhead(targetPart.Position)
+        local direction = Movement.FindWalkDirection(targetPart.Position)
+        if direction then
+            humanoid.AutoRotate = true
+            humanoid:MoveTo(root.Position + direction * 5.0)
+        else
+            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            humanoid:MoveTo(targetPart.Position)
+        end
+
+        if obstacleAhead then
+            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+        end
+
+        notifyStatus(
+            "AI: Local avoidance",
+            math.floor(currentDistance) .. " studs left",
+            direction and "Steering around obstacle." or "No clear side; retrying path."
+        )
+        task.wait(0.12)
     end
 
     return false
+end
+
+local function createPath()
+    return PathfindingService:CreatePath({
+        AgentRadius = 2.0,
+        AgentHeight = 5.0,
+        AgentCanJump = true,
+        AgentJumpHeight = 7.5,
+        AgentMaxSlope = 50.0,
+        WaypointSpacing = 3.5
+    })
 end
 
 function Navigator.GoTo(entry, onComplete)
@@ -122,7 +199,6 @@ function Navigator.GoTo(entry, onComplete)
     currentToken += 1
     local token = currentToken
     isRunning = true
-    currentTarget = entry
 
     task.spawn(function()
         local maxRepaths = Config.MaxRepaths or 6
@@ -143,30 +219,25 @@ function Navigator.GoTo(entry, onComplete)
                 return
             end
 
-            if withinReach(root, entry.part, reachDistance) then
+            if distanceToTarget(root, entry.part) <= reachDistance then
                 isRunning = false
                 notifyStatus("AI: Arrived", "At target: " .. entry.name)
                 if onComplete then onComplete(entry) end
                 return
             end
 
-            notifyStatus("AI: Pathfinding", entry.name, "Attempt " .. attempt .. "/" .. maxRepaths)
-            local path = PathfindingService:CreatePath({
-                AgentRadius = 2.0,
-                AgentHeight = 5.0,
-                AgentCanJump = true,
-                AgentJumpHeight = 7.5,
-                AgentMaxSlope = 50.0,
-                WaypointSpacing = 3.5
-            })
-
+            notifyStatus("AI: Mapping route", entry.name, "Attempt " .. attempt .. "/" .. maxRepaths)
+            local path = createPath()
             local computed = pcall(function()
                 path:ComputeAsync(root.Position, entry.part.Position)
             end)
 
-            local reached
+            local reached = false
             if computed and path.Status == Enum.PathStatus.Success then
-                reached = followPath(token, path:GetWaypoints(), entry.part, reachDistance)
+                reached = followPath(token, path, entry.part, reachDistance)
+                if not reached and isActive(token) then
+                    reached = directWalk(token, entry.part, reachDistance)
+                end
             else
                 reached = directWalk(token, entry.part, reachDistance)
             end
@@ -179,7 +250,7 @@ function Navigator.GoTo(entry, onComplete)
                 return
             end
 
-            task.wait(0.2)
+            task.wait(0.15)
         end
 
         Navigator.Stop("Route failed after max repaths.")
@@ -189,7 +260,6 @@ end
 function Navigator.Stop(reason)
     currentToken += 1
     isRunning = false
-    currentTarget = nil
 
     local humanoid = Movement and Movement.GetHumanoid()
     local root = Movement and Movement.GetRoot()
