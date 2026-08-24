@@ -1,5 +1,6 @@
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
 
 local Scanner = {}
 local player = Players.LocalPlayer
@@ -60,6 +61,28 @@ local function matchText(text, prompt, model, matchedInstance)
     return name, biome, resolvePart(prompt, model, matchedInstance)
 end
 
+local function matchMetadata(instance, prompt, model)
+    if not instance then return nil, nil, nil end
+
+    local name, biome, part = matchText(instance.Name, prompt, model, instance)
+    if name then return name, biome, part end
+
+    for attributeName, attributeValue in pairs(instance:GetAttributes()) do
+        name, biome, part = matchText(attributeName, prompt, model, instance)
+        if name then return name, biome, part end
+
+        name, biome, part = matchText(attributeValue, prompt, model, instance)
+        if name then return name, biome, part end
+    end
+
+    for _, tag in ipairs(CollectionService:GetTags(instance)) do
+        name, biome, part = matchText(tag, prompt, model, instance)
+        if name then return name, biome, part end
+    end
+
+    return nil, nil, nil
+end
+
 function Scanner.Identify(prompt)
     if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
         return nil, nil, nil
@@ -76,23 +99,26 @@ function Scanner.Identify(prompt)
     name, biome, part = matchText(prompt.ActionText, prompt, model)
     if name then return name, biome, part end
 
-    local genericModel = not model or model.Name == "Model" or model.Name == "SpawnedItems" or model.Name == "Workspace"
-    if model and not genericModel then
-        name, biome, part = matchText(model.Name, prompt, model, model)
+    name, biome, part = matchMetadata(prompt, prompt, model)
+    if name then return name, biome, part end
+
+    local current = prompt.Parent
+    while current and current ~= Workspace and current ~= game do
+        name, biome, part = matchMetadata(current, prompt, model)
         if name then return name, biome, part end
+        current = current.Parent
     end
 
-    if prompt.Parent then
-        name, biome, part = matchText(prompt.Parent.Name, prompt, model, prompt.Parent)
-        if name then return name, biome, part end
-    end
-
-    if model and genericModel then
+    local modelIsSharedContainer = model and (model.Name == "SpawnedItems" or model.Name == "Workspace")
+    if model and not modelIsSharedContainer then
         for _, descendant in ipairs(model:GetDescendants()) do
-            if descendant:IsA("BasePart") or descendant:IsA("MeshPart") or descendant:IsA("SpecialMesh") then
-                name, biome, part = matchText(descendant.Name, prompt, model, descendant)
-                if name then return name, biome, part end
-            end
+            name, biome, part = matchMetadata(descendant, prompt, model)
+            if name then return name, biome, part end
+        end
+    elseif prompt.Parent then
+        for _, descendant in ipairs(prompt.Parent:GetDescendants()) do
+            name, biome, part = matchMetadata(descendant, prompt, model)
+            if name then return name, biome, part end
         end
     end
 
