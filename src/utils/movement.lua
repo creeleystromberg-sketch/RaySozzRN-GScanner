@@ -26,7 +26,7 @@ function Movement.TryGroundedJump(cooldown, lastJumpTime)
     if not hum or hum.Health <= 0 then return lastJumpTime end
     
     local now = os.clock()
-    if now - (lastJumpTime or 0) < (cooldown or 0.85) then return lastJumpTime end
+    if now - (lastJumpTime or 0) < (cooldown or 0.8) then return lastJumpTime end
     if hum.FloorMaterial == Enum.Material.Air then return lastJumpTime end
 
     hum.Jump = true
@@ -38,7 +38,7 @@ function Movement.IsObstacleAhead(targetPos)
     local char = player.Character
     if not root or not char then return false end
 
-    local origin = root.Position - Vector3.new(0, 1.4, 0)
+    local origin = root.Position - Vector3.new(0, 1.35, 0)
     local flatDir = Vector3.new(targetPos.X - origin.X, 0, targetPos.Z - origin.Z)
     if flatDir.Magnitude < 0.1 then return false end
 

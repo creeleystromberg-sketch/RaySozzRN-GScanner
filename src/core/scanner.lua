@@ -15,31 +15,49 @@ function Scanner.Init(deps)
     Movement = deps.Movement
 end
 
+local function containsBlacklistedWord(text)
+    local normalized = string.lower(tostring(text or ""))
+    for _, word in ipairs(Database.EnvironmentBlacklist) do
+        if string.find(normalized, word, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 local function isBlacklisted(instance, prompt)
     if not Database then return false end
-    
-    if prompt then
-        local action = string.lower(tostring(prompt.ActionText or ""))
-        local object = string.lower(tostring(prompt.ObjectText or ""))
-        for _, word in ipairs(Database.EnvironmentBlacklist) do
-            if string.find(action, word, 1, true) or string.find(object, word, 1, true) then
-                return true
-            end
-        end
+
+    if prompt and (containsBlacklistedWord(prompt.ActionText) or containsBlacklistedWord(prompt.ObjectText)) then
+        return true
     end
 
     local current = instance
     while current and current ~= Workspace and current ~= game do
-        local name = string.lower(tostring(current.Name or ""))
-        for _, word in ipairs(Database.EnvironmentBlacklist) do
-            if string.find(name, word, 1, true) then
-                return true
-            end
-        end
+        if containsBlacklistedWord(current.Name) then return true end
         current = current.Parent
     end
 
     return false
+end
+
+local function resolvePart(prompt, model, matchedInstance)
+    if matchedInstance then
+        if matchedInstance:IsA("BasePart") then return matchedInstance end
+        if matchedInstance:IsA("SpecialMesh") and matchedInstance.Parent and matchedInstance.Parent:IsA("BasePart") then
+            return matchedInstance.Parent
+        end
+    end
+
+    if prompt.Parent and prompt.Parent:IsA("BasePart") then return prompt.Parent end
+    if model then return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true) end
+    return prompt:FindFirstAncestorWhichIsA("BasePart")
+end
+
+local function matchText(text, prompt, model, matchedInstance)
+    local name, biome = Database.Match(text)
+    if not name then return nil, nil, nil end
+    return name, biome, resolvePart(prompt, model, matchedInstance)
 end
 
 function Scanner.Identify(prompt)
@@ -48,44 +66,32 @@ function Scanner.Identify(prompt)
     end
 
     local model = prompt:FindFirstAncestorOfClass("Model")
-    if isBlacklisted(model or prompt.Parent, prompt) then
+    if isBlacklisted(prompt.Parent, prompt) then
         return nil, nil, nil
     end
 
-    -- 1. Check prompt ObjectText
-    if prompt.ObjectText and prompt.ObjectText ~= "" then
-        local name, biome = Database.Match(prompt.ObjectText)
-        if name and biome then
-            local part = prompt.Parent:IsA("BasePart") and prompt.Parent or (model and model.PrimaryPart) or prompt:FindFirstAncestorWhichIsA("BasePart")
-            return name, biome, part
-        end
+    local name, biome, part = matchText(prompt.ObjectText, prompt, model)
+    if name then return name, biome, part end
+
+    name, biome, part = matchText(prompt.ActionText, prompt, model)
+    if name then return name, biome, part end
+
+    local genericModel = not model or model.Name == "Model" or model.Name == "SpawnedItems" or model.Name == "Workspace"
+    if model and not genericModel then
+        name, biome, part = matchText(model.Name, prompt, model, model)
+        if name then return name, biome, part end
     end
 
-    -- 2. Check model name
-    if model and model.Name ~= "Workspace" and model.Name ~= "Map" and model.Name ~= "SpawnedItems" then
-        local name, biome = Database.Match(model.Name)
-        if name and biome then
-            local part = prompt.Parent:IsA("BasePart") and prompt.Parent or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
-            return name, biome, part
-        end
+    if prompt.Parent then
+        name, biome, part = matchText(prompt.Parent.Name, prompt, model, prompt.Parent)
+        if name then return name, biome, part end
     end
 
-    -- 3. Check direct parent BasePart
-    if prompt.Parent and prompt.Parent:IsA("BasePart") then
-        local name, biome = Database.Match(prompt.Parent.Name)
-        if name and biome then
-            return name, biome, prompt.Parent
-        end
-    end
-
-    -- 4. Deep search across child meshes/parts (Handles generic "Model" wrappers)
-    if model then
-        for _, child in ipairs(model:GetChildren()) do
-            if child:IsA("BasePart") then
-                local name, biome = Database.Match(child.Name)
-                if name and biome then
-                    return name, biome, child
-                end
+    if model and genericModel then
+        for _, descendant in ipairs(model:GetDescendants()) do
+            if descendant:IsA("BasePart") or descendant:IsA("MeshPart") or descendant:IsA("SpecialMesh") then
+                name, biome, part = matchText(descendant.Name, prompt, model, descendant)
+                if name then return name, biome, part end
             end
         end
     end
@@ -102,7 +108,22 @@ function Scanner.Scan()
 
     for _, descendant in ipairs(Workspace:GetDescendants()) do
         if descendant:IsA("ProximityPrompt") and descendant.Enabled then
-            local name, biome, part = Scanner.Identify(descendant)
+            local cached = cachedPrompts[descendant]
+            if cached and (not cached.part or not cached.part.Parent) then
+                cachedPrompts[descendant] = nil
+                cached = nil
+            end
+
+            local name, biome, part
+            if cached then
+                name, biome, part = cached.name, cached.biome, cached.part
+            else
+                name, biome, part = Scanner.Identify(descendant)
+                if name and biome and part then
+                    cachedPrompts[descendant] = { name = name, biome = biome, part = part }
+                end
+            end
+
             if name and biome and part and not seen[descendant] then
                 seen[descendant] = true
                 table.insert(entries, {
@@ -115,6 +136,10 @@ function Scanner.Scan()
                 })
             end
         end
+    end
+
+    for prompt in pairs(cachedPrompts) do
+        if not prompt.Parent or not prompt.Enabled then cachedPrompts[prompt] = nil end
     end
 
     table.sort(entries, function(a, b)

@@ -7,10 +7,9 @@ local Config = {
     ReachDistance = 3.5,
     WaypointTimeout = 3.2,
     MaxRepaths = 6,
-    GlideSpeed = 35,
     
     -- Scanner
-    ScanInterval = 0.35,
+    ScanInterval = 2.0,
     AutoStartTracker = true,
     
     -- UI Colors & Dimensions

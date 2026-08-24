@@ -55,9 +55,7 @@ function UI.Init(deps)
         Movement.SetSpeed(Config.DefaultSpeed or 18)
     end)
 
-    if Config.AutoStartTracker then
-        UI.ToggleTracker(true)
-    end
+    UI.ToggleTracker(true)
 end
 
 function UI.BuildMain()
@@ -476,7 +474,7 @@ function UI.BuildMain()
                     Collector.CollectItem(entry)
                 end)
             end
-            task.wait(Config.ScanInterval or 0.35)
+            task.wait(Config.ScanInterval or 2.0)
         end
     end)
 end
