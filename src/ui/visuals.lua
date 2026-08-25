@@ -151,6 +151,9 @@ function Visuals.Update(entries, guiParent)
         if visual and visual.distanceLabel then
             visual.distanceLabel.Text = tostring(math.floor(entry.distance + 0.5)) .. " studs"
         end
+        if visual and visual.nameLabel then
+            visual.nameLabel.Text = entry.name .. " (" .. entry.biome .. ")"
+        end
     end
 
     local stale = {}

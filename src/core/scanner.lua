@@ -1,200 +1,220 @@
 local Workspace = game:GetService("Workspace")
-local Players = game:GetService("Players")
 local CollectionService = game:GetService("CollectionService")
 
 local Scanner = {}
-local player = Players.LocalPlayer
-
-local cachedPrompts = {}
-local scannedEntries = {}
-
-local Database = nil
-local Movement = nil
-
-function Scanner.Init(deps)
-    Database = deps.Database
-    Movement = deps.Movement
-end
+local Database, Movement, Config
+local knownPrompts, cachedPrompts, scannedEntries = {}, {}, {}
+local connections = {}
+local lastFullScan = 0
 
 local function containsBlacklistedWord(text)
     local normalized = string.lower(tostring(text or ""))
     for _, word in ipairs(Database.EnvironmentBlacklist) do
-        if string.find(normalized, word, 1, true) then
-            return true
-        end
+        if string.find(normalized, word, 1, true) then return true end
     end
     return false
 end
 
-local function isBlacklisted(instance, prompt)
-    if not Database then return false end
-
-    if prompt and (containsBlacklistedWord(prompt.ActionText) or containsBlacklistedWord(prompt.ObjectText)) then
-        return true
-    end
-
-    local current = instance
+local function isBlacklisted(prompt)
+    if containsBlacklistedWord(prompt.ActionText) or containsBlacklistedWord(prompt.ObjectText) then return true end
+    local current = prompt.Parent
     while current and current ~= Workspace and current ~= game do
         if containsBlacklistedWord(current.Name) then return true end
         current = current.Parent
     end
-
     return false
 end
 
 local function isCollectionInteraction(prompt)
     local text = string.lower(tostring(prompt.ActionText or ""))
     for _, verb in ipairs({ "collect", "pick", "take", "grab", "obtain", "harvest" }) do
-        if string.find(text, verb, 1, true) then
-            return true
-        end
+        if string.find(text, verb, 1, true) then return true end
     end
     return false
 end
 
-local function resolvePart(prompt, model, matchedInstance)
-    if matchedInstance then
-        if matchedInstance:IsA("BasePart") then return matchedInstance end
-        if matchedInstance:IsA("SpecialMesh") and matchedInstance.Parent and matchedInstance.Parent:IsA("BasePart") then
-            return matchedInstance.Parent
+local function resolvePart(prompt, model)
+    if prompt.Parent and prompt.Parent:IsA("BasePart") then return prompt.Parent end
+    local ancestorPart = prompt:FindFirstAncestorWhichIsA("BasePart")
+    if ancestorPart then return ancestorPart end
+    if model then return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true) end
+    return nil
+end
+
+local function appendMetadata(values, instance)
+    if not instance then return end
+    values[#values + 1] = instance.Name
+    for attributeName, attributeValue in pairs(instance:GetAttributes()) do
+        values[#values + 1] = attributeName
+        values[#values + 1] = attributeValue
+    end
+    for _, tag in ipairs(CollectionService:GetTags(instance)) do values[#values + 1] = tag end
+end
+
+local function appearanceContainer(prompt, model)
+    if model then
+        local promptCount = 0
+        for _, descendant in ipairs(model:GetDescendants()) do
+            if descendant:IsA("ProximityPrompt") then
+                promptCount += 1
+                if promptCount > 1 then break end
+            end
+        end
+        if promptCount <= 1 then return model end
+    end
+    return resolvePart(prompt, model) or prompt.Parent
+end
+
+local function looksLikeCurruptaine(prompt, model)
+    if not isCollectionInteraction(prompt) then return false end
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
+    local purple, colored = 0, 0
+    local candidates = container:IsA("BasePart") and { container } or container:GetDescendants()
+    for _, instance in ipairs(candidates) do
+        if instance:IsA("BasePart") and instance.Transparency < 0.95 then
+            local color = instance.Color
+            colored += 1
+            if color.B > color.G * 1.25 and color.R > color.G * 1.05 then purple += 1 end
         end
     end
-
-    if prompt.Parent and prompt.Parent:IsA("BasePart") then return prompt.Parent end
-    if model then return model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true) end
-    return prompt:FindFirstAncestorWhichIsA("BasePart")
+    return colored > 0 and purple / colored >= 0.45
 end
 
-local function matchText(text, prompt, model, matchedInstance)
-    local name, biome = Database.Match(text)
-    if not name then return nil, nil, nil end
-    return name, biome, resolvePart(prompt, model, matchedInstance)
-end
-
-local function matchMetadata(instance, prompt, model)
-    if not instance then return nil, nil, nil end
-
-    local name, biome, part = matchText(instance.Name, prompt, model, instance)
-    if name then return name, biome, part end
-
-    for attributeName, attributeValue in pairs(instance:GetAttributes()) do
-        name, biome, part = matchText(attributeName, prompt, model, instance)
-        if name then return name, biome, part end
-
-        name, biome, part = matchText(attributeValue, prompt, model, instance)
-        if name then return name, biome, part end
+local function looksLikeNullItem(prompt, model)
+    if not isCollectionInteraction(prompt) then return false end
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
+    local grayscale, colored = 0, 0
+    local candidates = container:IsA("BasePart") and { container } or container:GetDescendants()
+    for _, instance in ipairs(candidates) do
+        if instance:IsA("BasePart") and instance.Transparency < 0.95 then
+            local color = instance.Color
+            local highest = math.max(color.R, color.G, color.B)
+            local lowest = math.min(color.R, color.G, color.B)
+            colored += 1
+            if highest - lowest <= 0.12 and (color.R + color.G + color.B) / 3 <= 0.68 then
+                grayscale += 1
+            end
+        end
     end
-
-    for _, tag in ipairs(CollectionService:GetTags(instance)) do
-        name, biome, part = matchText(tag, prompt, model, instance)
-        if name then return name, biome, part end
-    end
-
-    return nil, nil, nil
+    return colored > 0 and grayscale / colored >= 0.4
 end
 
 function Scanner.Identify(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
+    if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled or isBlacklisted(prompt) then
         return nil, nil, nil
     end
-
     local model = prompt:FindFirstAncestorOfClass("Model")
-    if isBlacklisted(prompt.Parent, prompt) then
-        return nil, nil, nil
-    end
+    local part = resolvePart(prompt, model)
+    if not part then return nil, nil, nil end
 
-    local name, biome, part = matchText(prompt.ObjectText, prompt, model)
+    local name, biome = Database.Classify({ prompt.ObjectText, prompt.ActionText })
     if name then return name, biome, part end
+    if not isCollectionInteraction(prompt) then return nil, nil, nil end
 
-    name, biome, part = matchText(prompt.ActionText, prompt, model)
-    if name then return name, biome, part end
-
-    name, biome, part = matchMetadata(prompt, prompt, model)
-    if name then return name, biome, part end
-
+    local values = {}
+    appendMetadata(values, prompt)
     local current = prompt.Parent
     while current and current ~= Workspace and current ~= game do
-        name, biome, part = matchMetadata(current, prompt, model)
-        if name then return name, biome, part end
+        appendMetadata(values, current)
+        if current == model then break end
         current = current.Parent
     end
 
-    -- Descendant names are noisy: NPCs, minigames, and boards often contain
-    -- weather/material words in their UI. Only use deep metadata as a fallback
-    -- when the prompt itself clearly describes a collection interaction.
-    if not isCollectionInteraction(prompt) then
-        return nil, nil, nil
+    -- Only inspect the prompt's physical item. Scanning the full enclosing model
+    -- mixes metadata when several spawned materials share one container.
+    appendMetadata(values, part)
+    for _, descendant in ipairs(part:GetDescendants()) do
+        appendMetadata(values, descendant)
     end
 
-    local modelIsSharedContainer = model and (model.Name == "SpawnedItems" or model.Name == "Workspace")
-    if model and not modelIsSharedContainer then
-        for _, descendant in ipairs(model:GetDescendants()) do
-            name, biome, part = matchMetadata(descendant, prompt, model)
-            if name then return name, biome, part end
-        end
-    elseif prompt.Parent then
-        for _, descendant in ipairs(prompt.Parent:GetDescendants()) do
-            name, biome, part = matchMetadata(descendant, prompt, model)
-            if name then return name, biome, part end
-        end
-    end
-
+    name, biome = Database.Classify(values)
+    if name then return name, biome, part end
+    if looksLikeCurruptaine(prompt, model) then return "Curruptaine", "Corruption", part end
+    if looksLikeNullItem(prompt, model) then return "NULL?", "Null", part end
     return nil, nil, nil
 end
 
-function Scanner.Scan()
+local function register(instance)
+    if instance:IsA("ProximityPrompt") then
+        knownPrompts[instance] = true
+        cachedPrompts[instance] = nil
+    end
+end
+
+function Scanner.FullRescan()
+    knownPrompts = {}
+    cachedPrompts = {}
+    for _, descendant in ipairs(Workspace:GetDescendants()) do register(descendant) end
+    lastFullScan = os.clock()
+end
+
+function Scanner.Init(deps)
+    Database, Movement, Config = deps.Database, deps.Movement, deps.Config
+    for _, connection in ipairs(connections) do connection:Disconnect() end
+    connections = {
+        Workspace.DescendantAdded:Connect(register),
+        Workspace.DescendantRemoving:Connect(function(instance)
+            if instance:IsA("ProximityPrompt") then
+                knownPrompts[instance], cachedPrompts[instance] = nil, nil
+            end
+        end),
+    }
+end
+
+function Scanner.Invalidate()
+    cachedPrompts = {}
+    lastFullScan = 0
+end
+
+function Scanner.Scan(forceFull)
     local root = Movement and Movement.GetRoot()
     if not root then return {} end
+    local interval = (Config and Config.FullRescanInterval) or 15
+    if forceFull or lastFullScan == 0 or os.clock() - lastFullScan >= interval then Scanner.FullRescan() end
 
     local entries = {}
-    local seen = {}
-
-    for _, descendant in ipairs(Workspace:GetDescendants()) do
-        if descendant:IsA("ProximityPrompt") and descendant.Enabled then
-            local cached = cachedPrompts[descendant]
-            if cached and (not cached.part or not cached.part.Parent) then
-                cachedPrompts[descendant] = nil
-                cached = nil
-            end
-
-            local name, biome, part
-            if cached then
-                name, biome, part = cached.name, cached.biome, cached.part
-            else
-                name, biome, part = Scanner.Identify(descendant)
+    for prompt in pairs(knownPrompts) do
+        if not prompt.Parent or not prompt.Enabled then
+            knownPrompts[prompt], cachedPrompts[prompt] = nil, nil
+        else
+            local cached = cachedPrompts[prompt]
+            if cached and not cached.ignored and (not cached.part or not cached.part.Parent) then cached = nil end
+            if not cached then
+                local name, biome, part = Scanner.Identify(prompt)
                 if name and biome and part then
-                    cachedPrompts[descendant] = { name = name, biome = biome, part = part }
+                    cached = { name = name, biome = biome, part = part }
+                else
+                    cached = { ignored = true }
                 end
+                cachedPrompts[prompt] = cached
             end
-
-            if name and biome and part and not seen[descendant] then
-                seen[descendant] = true
-                table.insert(entries, {
-                    prompt = descendant,
-                    model = descendant:FindFirstAncestorOfClass("Model") or descendant.Parent,
-                    part = part,
-                    name = name,
-                    biome = biome,
-                    distance = (root.Position - part.Position).Magnitude
-                })
+            if cached and not cached.ignored then
+                entries[#entries + 1] = {
+                    prompt = prompt,
+                    model = prompt:FindFirstAncestorOfClass("Model") or prompt.Parent,
+                    part = cached.part,
+                    name = cached.name,
+                    biome = cached.biome,
+                    distance = (root.Position - cached.part.Position).Magnitude,
+                }
             end
         end
     end
-
-    for prompt in pairs(cachedPrompts) do
-        if not prompt.Parent or not prompt.Enabled then cachedPrompts[prompt] = nil end
-    end
-
-    table.sort(entries, function(a, b)
-        return a.distance < b.distance
-    end)
-
+    table.sort(entries, function(a, b) return a.distance < b.distance end)
     scannedEntries = entries
     return entries
 end
 
 function Scanner.GetEntries()
     return scannedEntries
+end
+
+function Scanner.Destroy()
+    for _, connection in ipairs(connections) do connection:Disconnect() end
+    connections = {}
+    knownPrompts, cachedPrompts, scannedEntries = {}, {}, {}
 end
 
 return Scanner

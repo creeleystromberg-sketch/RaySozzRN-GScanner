@@ -1,15 +1,15 @@
 local Database = {}
 
 Database.Materials = {
-    ["Wind Essence"] = { Biome = "Windy", Signatures = {"wind", "essence", "windb", "windc"} },
-    ["Icicle"]       = { Biome = "Snowy", Signatures = {"icicle", "snow", "ice"} },
-    ["Rainy Bottle"] = { Biome = "Rainy", Signatures = {"rain", "bottle"} },
-    ["Hour Glass"]   = { Biome = "Sandstorm", Signatures = {"hour", "glass", "hourglass", "sand"} },
-    ["Eternal Flame"]= { Biome = "Hell", Signatures = {"eternal", "flame", "hell", "fire"} },
-    ["Piece of Star"]= { Biome = "Starfall", Signatures = {"star", "meteor", "comet"} },
-    ["Feather Vial"] = { Biome = "Heaven", Signatures = {"feather", "vial", "heaven"} },
-    ["Curruptaine"]  = { Biome = "Corruption", Signatures = {"currupt", "corrupt", "corruptaine"} },
-    ["NULL?"]        = { Biome = "Null", Signatures = {"null", "void", "null?"} }
+    ["Wind Essence"] = { Biome = "Windy" },
+    ["Icicle"] = { Biome = "Snowy" },
+    ["Rainy Bottle"] = { Biome = "Rainy" },
+    ["Hour Glass"] = { Biome = "Sandstorm" },
+    ["Eternal Flame"] = { Biome = "Hell" },
+    ["Piece of Star"] = { Biome = "Starfall" },
+    ["Feather Vial"] = { Biome = "Heaven" },
+    ["Curruptaine"] = { Biome = "Corruption" },
+    ["NULL?"] = { Biome = "Null" },
 }
 
 Database.EnvironmentBlacklist = {
@@ -17,37 +17,74 @@ Database.EnvironmentBlacklist = {
     "bank", "cauldron", "altar", "portal", "teleport", "leaderboard",
     "turret", "clover", "four leaf", "luck buff", "offer", "required",
     "requires", "submit", "sacrifice", "talk", "speak", "chat",
-    "memory match", "ready", "roll"
+    "memory match", "ready", "roll",
 }
 
-function Database.Match(text)
-    local low = string.lower(tostring(text or ""))
-    if low == "" then return nil, nil end
+local rules = {
+    ["Wind Essence"] = {
+        { "wind essence", 120 }, { "windb", 80 }, { "windc", 80 },
+        { "essence", 35 }, { "wind", 8 },
+    },
+    ["Icicle"] = {
+        { "icicle", 120 }, { "snowy", 15 }, { "snow", 10 }, { "ice", 8 },
+    },
+    ["Rainy Bottle"] = {
+        { "rainy bottle", 120 }, { "rain bottle", 100 },
+        { "bottle", 35 }, { "rainy", 12 }, { "rain", 8 },
+    },
+    ["Hour Glass"] = {
+        { "hour glass", 120 }, { "hourglass", 120 },
+        { "hour", 35 }, { "glass", 30 }, { "sandstorm", 8 }, { "sand", 5 },
+    },
+    ["Eternal Flame"] = {
+        { "eternal flame", 140 }, { "eternal", 65 }, { "flame", 60 },
+        { "hell", 12 }, { "fire", 10 },
+    },
+    ["Piece of Star"] = {
+        { "piece of star", 140 }, { "starfall", 40 },
+        { "meteor", 35 }, { "comet", 35 }, { "star", 12 },
+    },
+    ["Feather Vial"] = {
+        { "feather vial", 140 }, { "feather", 60 }, { "vial", 50 }, { "heaven", 10 },
+    },
+    ["Curruptaine"] = {
+        { "curruptaine", 160 }, { "corruptaine", 160 }, { "curruptain", 150 },
+        { "corruptain", 150 }, { "currupt", 75 }, { "corrupt", 70 },
+        { "corruption", 30 }, { "corrupted", 30 },
+    },
+    ["NULL?"] = {
+        { "null?", 140 }, { "null", 70 }, { "void", 25 },
+    },
+}
 
-    if string.find(low, "feather", 1, true) or string.find(low, "vial", 1, true) or string.find(low, "heaven", 1, true) then
-        return "Feather Vial", "Heaven"
-    elseif string.find(low, "null", 1, true) or string.find(low, "void", 1, true) then
-        return "NULL?", "Null"
-    elseif string.find(low, "currupt", 1, true) or string.find(low, "corrupt", 1, true) then
-        return "Curruptaine", "Corruption"
-    elseif string.find(low, "eternal", 1, true) or string.find(low, "flame", 1, true) or string.find(low, "hell", 1, true) then
-        return "Eternal Flame", "Hell"
-    elseif (string.find(low, "star", 1, true) and not string.find(low, "start", 1, true))
-        or string.find(low, "meteor", 1, true) or string.find(low, "comet", 1, true) then
-        return "Piece of Star", "Starfall"
-    elseif string.find(low, "wind", 1, true) or string.find(low, "essence", 1, true)
-        or string.find(low, "windb", 1, true) or string.find(low, "windc", 1, true) then
-        return "Wind Essence", "Windy"
-    elseif string.find(low, "icicle", 1, true) or string.find(low, "snow", 1, true) or string.find(low, "ice", 1, true) then
-        return "Icicle", "Snowy"
-    elseif string.find(low, "hour", 1, true) or string.find(low, "glass", 1, true)
-        or string.find(low, "hourglass", 1, true) or string.find(low, "sand", 1, true) then
-        return "Hour Glass", "Sandstorm"
-    elseif string.find(low, "rain", 1, true) or string.find(low, "bottle", 1, true) then
-        return "Rainy Bottle", "Rainy"
+function Database.Classify(values)
+    local scores = {}
+    for material in pairs(Database.Materials) do scores[material] = 0 end
+
+    for _, value in ipairs(values or {}) do
+        local text = string.lower(tostring(value or ""))
+        if text ~= "" then
+            for material, signatures in pairs(rules) do
+                for _, signature in ipairs(signatures) do
+                    if string.find(text, signature[1], 1, true) then
+                        scores[material] += signature[2]
+                    end
+                end
+            end
+        end
     end
 
-    return nil, nil
+    local bestName, bestScore = nil, 0
+    for material, score in pairs(scores) do
+        if score > bestScore then bestName, bestScore = material, score end
+    end
+    if not bestName or bestScore < 10 then return nil, nil, 0 end
+    return bestName, Database.Materials[bestName].Biome, bestScore
+end
+
+function Database.Match(text)
+    local name, biome = Database.Classify({ text })
+    return name, biome
 end
 
 return Database

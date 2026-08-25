@@ -1,75 +1,65 @@
--- Sol's RNG Universal Modular Loader
--- Repository: creeleystromberg-sketch/RaySozzRN-GScanner
-
+-- Sol's RNG material tracker
 local REPO_URL = "https://raw.githubusercontent.com/creeleystromberg-sketch/RaySozzRN-GScanner/main/src/"
+local RELEASE = "tracker-002"
 
 local function import(path)
-    local url = REPO_URL .. path .. ".lua?t=" .. tostring(os.time())
-    
     local ok, source = pcall(function()
-        return game:HttpGet(url)
+        return game:HttpGet(REPO_URL .. path .. ".lua?v=" .. RELEASE)
     end)
-
     if not ok or not source or source == "" or string.find(source, "404: Not Found", 1, true) then
-        error("[Loader 404] File not found: " .. path .. ".lua (Check path and file name on GitHub)")
+        error("[Loader] Could not load " .. path .. ".lua: " .. tostring(source))
     end
-
-    local fn, syntaxErr = loadstring(source)
-    if not fn then
-        error("[Loader Syntax Error] in " .. path .. ": " .. tostring(syntaxErr))
-    end
-
-    print("[✓ Loaded] " .. path)
-    return fn()
+    local chunk, syntaxError = loadstring(source)
+    if not chunk then error("[Loader] Syntax error in " .. path .. ": " .. tostring(syntaxError)) end
+    return chunk()
 end
 
-print("------------------------------------------")
-print("[Sols Scanner] Starting modular initialization...")
+local function importBatch(modules)
+    local results, errors = {}, {}
+    local remaining = 0
+    local completed = Instance.new("BindableEvent")
 
--- 1. Utilities & Config
-local Config    = import("config")
-local Database  = import("database")
-local Movement  = import("utils/movement")
-local Server    = import("utils/server")
+    for key, path in pairs(modules) do
+        remaining += 1
+        task.spawn(function()
+            local ok, result = pcall(import, path)
+            if ok then results[key] = result else errors[key] = result end
+            remaining -= 1
+            completed:Fire()
+        end)
+    end
+    while remaining > 0 do completed.Event:Wait() end
+    completed:Destroy()
 
--- 2. Core Engines
-local Scanner   = import("core/scanner")
-local Navigator = import("core/navigator")
-local Collector = import("core/collector")
-local Visuals   = import("ui/visuals")
-local UI        = import("ui/interface")
+    for key, loadError in pairs(errors) do
+        error("[Loader] Module " .. key .. " failed: " .. tostring(loadError))
+    end
+    return results
+end
 
--- 3. Dependency Injection
-Scanner.Init({
-    Database = Database,
-    Movement = Movement
+print("[Sols Tracker] Loading modules...")
+local modules = importBatch({
+    Config = "config",
+    Database = "database",
+    Movement = "utils/movement",
+    Server = "utils/server",
+    Scanner = "core/scanner",
+    Visuals = "ui/visuals",
+    UI = "ui/interface",
 })
 
-Navigator.Init({
-    Movement = Movement,
-    Config = Config
+modules.Scanner.Init({
+    Database = modules.Database,
+    Movement = modules.Movement,
+    Config = modules.Config,
+})
+modules.Visuals.Init({ Movement = modules.Movement })
+modules.UI.Init({
+    Config = modules.Config,
+    Scanner = modules.Scanner,
+    Visuals = modules.Visuals,
+    Movement = modules.Movement,
+    Server = modules.Server,
 })
 
-Collector.Init({
-    Scanner = Scanner,
-    Navigator = Navigator,
-    Config = Config
-})
-
-Visuals.Init({
-    Movement = Movement
-})
-
--- 4. Launch Interface
-UI.Init({
-    Config = Config,
-    Scanner = Scanner,
-    Navigator = Navigator,
-    Collector = Collector,
-    Visuals = Visuals,
-    Movement = Movement,
-    Server = Server
-})
-
-print("[Sols Scanner] System successfully initialized.")
-print("------------------------------------------")
+print("[Sols Tracker] Ready.")

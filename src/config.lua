@@ -1,15 +1,11 @@
 local Config = {
     Version = "v1.0.0",
-    Build = "MODULAR-001",
+    Build = "TRACKER-002",
     DefaultSpeed = 18,
     
-    -- Navigation
-    ReachDistance = 3.5,
-    WaypointTimeout = 3.2,
-    MaxRepaths = 6,
-    
     -- Scanner
-    ScanInterval = 2.0,
+    ScanInterval = 1.0,
+    FullRescanInterval = 15.0,
     AutoStartTracker = true,
     
     -- UI Colors & Dimensions
