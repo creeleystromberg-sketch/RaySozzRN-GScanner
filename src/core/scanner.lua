@@ -68,16 +68,18 @@ end
 local function forEachAppearanceColor(container, callback)
     local function inspect(instance)
         if instance:IsA("BasePart") and instance.Transparency < 0.95 then
-            callback(instance.Color)
+            callback(instance.Color, instance)
         elseif instance:IsA("PointLight") or instance:IsA("SpotLight") or instance:IsA("SurfaceLight") then
-            callback(instance.Color)
+            callback(instance.Color, instance)
         elseif instance:IsA("Fire") then
-            callback(instance.Color)
-            callback(instance.SecondaryColor)
+            callback(instance.Color, instance)
+            callback(instance.SecondaryColor, instance)
+        elseif instance:IsA("Smoke") then
+            callback(instance.Color, instance)
         elseif instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") then
-            for _, keypoint in ipairs(instance.Color.Keypoints) do callback(keypoint.Value) end
+            for _, keypoint in ipairs(instance.Color.Keypoints) do callback(keypoint.Value, instance) end
         elseif instance:IsA("Decal") or instance:IsA("Texture") then
-            callback(instance.Color3)
+            callback(instance.Color3, instance)
         end
     end
 
@@ -93,12 +95,16 @@ local function looksLikeEternalFlame(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
     if not container then return false end
-    local warmColors, coolBlue = 0, 0
-    forEachAppearanceColor(container, function(color)
-        if isWarmFlameColor(color) then warmColors += 1 end
+    local warmEffects, coolBlue = 0, 0
+    forEachAppearanceColor(container, function(color, source)
+        local isEffect = source:IsA("Fire") or source:IsA("ParticleEmitter")
+            or source:IsA("Trail") or source:IsA("Beam")
+            or source:IsA("PointLight") or source:IsA("SpotLight") or source:IsA("SurfaceLight")
+            or (source:IsA("BasePart") and source.Material == Enum.Material.Neon)
+        if isEffect and isWarmFlameColor(color) then warmEffects += 1 end
         if color.B >= 0.32 and color.B > color.R * 1.08 and color.B >= color.G then coolBlue += 1 end
     end)
-    return warmColors > 0 and coolBlue == 0
+    return warmEffects > 0 and coolBlue == 0
 end
 
 local function looksLikePieceOfStar(prompt, model)
@@ -161,6 +167,55 @@ local function looksLikeNullItem(prompt, model)
     return colored > 0 and vivid == 0 and grayscale / colored >= 0.4
 end
 
+local function appearanceFeatures(prompt, model)
+    local container = appearanceContainer(prompt, model)
+    if not container then return nil end
+    local features = {
+        cyan = 0, deepBlue = 0, white = 0, gray = 0,
+        gold = 0, brown = 0, effects = 0,
+    }
+    forEachAppearanceColor(container, function(color, source)
+        local highest = math.max(color.R, color.G, color.B)
+        local lowest = math.min(color.R, color.G, color.B)
+        if color.G >= 0.5 and color.B >= 0.5 and color.R <= 0.58 then features.cyan += 1 end
+        if color.B >= 0.3 and color.B > color.R * 1.15 and color.B > color.G * 1.03 then features.deepBlue += 1 end
+        if lowest >= 0.72 then features.white += 1 end
+        if highest - lowest <= 0.13 and highest <= 0.72 then features.gray += 1 end
+        if color.R >= 0.56 and color.G >= 0.34 and color.B <= 0.32 then features.gold += 1 end
+        if color.R >= 0.18 and color.R <= 0.68 and color.R > color.G * 1.08
+            and color.G > color.B * 1.04 then features.brown += 1 end
+        if source:IsA("ParticleEmitter") or source:IsA("Smoke") or source:IsA("Trail")
+            or source:IsA("Beam") then features.effects += 1 end
+    end)
+    return features
+end
+
+local function looksLikeWindEssence(prompt, model)
+    local f = appearanceFeatures(prompt, model)
+    return f and f.cyan >= 1 and f.white >= 1 and f.effects >= 1
+end
+
+local function looksLikeRainyBottle(prompt, model)
+    local f = appearanceFeatures(prompt, model)
+    return f and f.deepBlue >= 1 and f.gray >= 1 and f.effects >= 1
+end
+
+local function looksLikeIcicle(prompt, model)
+    local f = appearanceFeatures(prompt, model)
+    return f and (f.cyan >= 1 or f.deepBlue >= 1) and f.effects == 0
+        and f.gold == 0 and f.brown <= 1
+end
+
+local function looksLikeFeatherVial(prompt, model)
+    local f = appearanceFeatures(prompt, model)
+    return f and f.gold >= 1 and f.white >= 1 and f.deepBlue == 0 and f.brown <= 1
+end
+
+local function looksLikeHourGlass(prompt, model)
+    local f = appearanceFeatures(prompt, model)
+    return f and f.gold >= 1 and f.brown >= 1 and f.cyan == 0 and f.deepBlue == 0
+end
+
 function Scanner.Identify(prompt)
     if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled or isBlacklisted(prompt) then
         return nil, nil, nil
@@ -189,11 +244,24 @@ function Scanner.Identify(prompt)
         appendMetadata(values, descendant)
     end
 
+    local localContainer = appearanceContainer(prompt, model)
+    if localContainer and localContainer ~= part then
+        appendMetadata(values, localContainer)
+        for _, descendant in ipairs(localContainer:GetDescendants()) do
+            appendMetadata(values, descendant)
+        end
+    end
+
     name, biome = Database.Classify(values)
     if name then return name, biome, part end
     if looksLikeEternalFlame(prompt, model) then return "Eternal Flame", "Hell", part end
     if looksLikePieceOfStar(prompt, model) then return "Piece of Star", "Starfall", part end
     if looksLikeCurruptaine(prompt, model) then return "Curruptaine", "Corruption", part end
+    if looksLikeWindEssence(prompt, model) then return "Wind Essence", "Windy", part end
+    if looksLikeRainyBottle(prompt, model) then return "Rainy Bottle", "Rainy", part end
+    if looksLikeIcicle(prompt, model) then return "Icicle", "Snowy", part end
+    if looksLikeFeatherVial(prompt, model) then return "Feather Vial", "Heaven", part end
+    if looksLikeHourGlass(prompt, model) then return "Hour Glass", "Sandstorm", part end
     if looksLikeNullItem(prompt, model) then return "NULL?", "Null", part end
     return nil, nil, nil
 end
