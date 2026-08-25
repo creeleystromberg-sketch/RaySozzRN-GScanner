@@ -53,7 +53,12 @@ function Movement.CanLand(targetPos)
 
     local flat = Vector3.new(targetPos.X - root.Position.X, 0, targetPos.Z - root.Position.Z)
     if flat.Magnitude < 0.1 then return true end
-    return hasSafeGround(root.Position, flat.Unit, math.min(flat.Magnitude, 5.0))
+
+    local direction = flat.Unit
+    local distance = math.min(flat.Magnitude, 5.0)
+    local landingOrigin = root.Position + direction * distance + Vector3.new(0, 3.0, 0)
+    local ground = Workspace:Raycast(landingOrigin, Vector3.new(0, -10.0, 0), raycastParams())
+    return ground ~= nil and root.Position.Y - ground.Position.Y <= 7.5
 end
 
 function Movement.GetHumanoid()
@@ -83,6 +88,7 @@ function Movement.TryGroundedJump(cooldown, lastJumpTime, targetPos)
     if targetPos and not Movement.CanLand(targetPos) then return lastJumpTime end
 
     hum.Jump = true
+    hum:ChangeState(Enum.HumanoidStateType.Jumping)
     return now
 end
 

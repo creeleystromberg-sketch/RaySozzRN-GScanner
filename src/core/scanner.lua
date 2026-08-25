@@ -42,6 +42,16 @@ local function isBlacklisted(instance, prompt)
     return false
 end
 
+local function isCollectionInteraction(prompt)
+    local text = string.lower(tostring(prompt.ActionText or ""))
+    for _, verb in ipairs({ "collect", "pick", "take", "grab", "obtain", "harvest" }) do
+        if string.find(text, verb, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 local function resolvePart(prompt, model, matchedInstance)
     if matchedInstance then
         if matchedInstance:IsA("BasePart") then return matchedInstance end
@@ -107,6 +117,13 @@ function Scanner.Identify(prompt)
         name, biome, part = matchMetadata(current, prompt, model)
         if name then return name, biome, part end
         current = current.Parent
+    end
+
+    -- Descendant names are noisy: NPCs, minigames, and boards often contain
+    -- weather/material words in their UI. Only use deep metadata as a fallback
+    -- when the prompt itself clearly describes a collection interaction.
+    if not isCollectionInteraction(prompt) then
+        return nil, nil, nil
     end
 
     local modelIsSharedContainer = model and (model.Name == "SpawnedItems" or model.Name == "Workspace")
