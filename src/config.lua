@@ -1,6 +1,6 @@
 local Config = {
     Version = "v1.0.0",
-    Build = "TRACKER-007",
+    Build = "TRACKER-008",
     DefaultSpeed = 18,
     
     -- Scanner

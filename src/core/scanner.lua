@@ -60,6 +60,12 @@ local function appendMetadata(values, instance)
     if not instance then return end
     values[#values + 1] = instance.Name
     if instance:IsA("StringValue") then values[#values + 1] = instance.Value end
+    if instance:IsA("MeshPart") then
+        values[#values + 1] = instance.MeshId
+        values[#values + 1] = instance.TextureID
+    elseif instance:IsA("ParticleEmitter") or instance:IsA("Decal") or instance:IsA("Texture") then
+        values[#values + 1] = instance.Texture
+    end
     for attributeName, attributeValue in pairs(instance:GetAttributes()) do
         values[#values + 1] = attributeName
         values[#values + 1] = attributeValue

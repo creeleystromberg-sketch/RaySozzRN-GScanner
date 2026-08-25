@@ -30,10 +30,12 @@ Database.PickupBlacklist = {
 local rules = {
     ["Wind Essence"] = {
         { "wind essence", 120 }, { "windb", 80 }, { "windc", 80 },
+        { "1946917526", 20 }, { "12713360200", 20 }, { "13803462600", 20 },
         { "essence", 35 }, { "wind", 8 },
     },
     ["Icicle"] = {
-        { "icicle", 120 }, { "snowy", 15 }, { "snow", 10 }, { "ice", 8 },
+        { "icicle", 120 }, { "17413674509", 200 }, { "17413732419", 30 },
+        { "snowy", 15 }, { "snow", 10 }, { "ice", 8 },
     },
     ["Rainy Bottle"] = {
         { "rainy bottle", 120 }, { "rain bottle", 100 },
@@ -60,7 +62,7 @@ local rules = {
         { "corruption", 30 }, { "corrupted", 30 },
     },
     ["NULL?"] = {
-        { "null?", 140 }, { "null", 70 }, { "void", 25 },
+        { "null?", 140 }, { "null", 70 }, { "17052637850", 220 }, { "void", 25 },
     },
 }
 
