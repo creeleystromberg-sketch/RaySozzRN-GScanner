@@ -32,6 +32,19 @@ local function moveToWaypoint(token, waypoint, waypointIndex, waypointCount, tar
     local humanoid = Movement.GetHumanoid()
     if not root or not humanoid then return "failed" end
 
+    local initialDirection = Vector3.new(
+        waypoint.Position.X - root.Position.X,
+        0,
+        waypoint.Position.Z - root.Position.Z
+    )
+    local waypointJumpPending = waypoint.Action == Enum.PathWaypointAction.Jump
+    if not waypointJumpPending
+        and initialDirection.Magnitude > 0.1
+        and not Movement.IsDirectionSafe(initialDirection, math.min(initialDirection.Magnitude, 3.0)) then
+        humanoid:MoveTo(root.Position)
+        return "repath"
+    end
+
     humanoid.AutoRotate = true
     humanoid:MoveTo(waypoint.Position)
 
@@ -40,7 +53,6 @@ local function moveToWaypoint(token, waypoint, waypointIndex, waypointCount, tar
     local lastPosition = root.Position
     local lastJumpTime = 0
     local recoveryJumps = 0
-    local waypointJumpPending = waypoint.Action == Enum.PathWaypointAction.Jump
 
     while os.clock() - startedAt < (Config.WaypointTimeout or 3.2) do
         if not isActive(token) or not targetPart.Parent then return "cancelled" end
@@ -57,11 +69,19 @@ local function moveToWaypoint(token, waypoint, waypointIndex, waypointCount, tar
             return "waypoint"
         end
 
+        if humanoid.FloorMaterial ~= Enum.Material.Air
+            and not waypointJumpPending
+            and flatOffset.Magnitude > 0.1
+            and not Movement.IsDirectionSafe(flatOffset, math.min(flatOffset.Magnitude, 3.0)) then
+            humanoid:MoveTo(root.Position)
+            return "repath"
+        end
+
         local obstacleAhead = Movement.IsObstacleAhead(waypoint.Position)
         if waypointJumpPending
             or waypoint.Position.Y - root.Position.Y > 1.3
             or obstacleAhead then
-            local jumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            local jumpTime = Movement.TryGroundedJump(0.8, lastJumpTime, waypoint.Position)
             if waypointJumpPending and jumpTime ~= lastJumpTime then waypointJumpPending = false end
             lastJumpTime = jumpTime
         end
@@ -71,7 +91,7 @@ local function moveToWaypoint(token, waypoint, waypointIndex, waypointCount, tar
             lastProgressAt = os.clock()
             recoveryJumps = 0
         elseif os.clock() - lastProgressAt > 0.8 then
-            local jumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            local jumpTime = Movement.TryGroundedJump(0.8, lastJumpTime, waypoint.Position)
             if jumpTime ~= lastJumpTime then recoveryJumps += 1 end
             lastJumpTime = jumpTime
             humanoid:MoveTo(waypoint.Position)
@@ -160,12 +180,12 @@ local function directWalk(token, targetPart, reachDistance)
             humanoid.AutoRotate = true
             humanoid:MoveTo(root.Position + direction * 5.0)
         else
-            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime, targetPart.Position)
             humanoid:MoveTo(targetPart.Position)
         end
 
         if obstacleAhead then
-            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime)
+            lastJumpTime = Movement.TryGroundedJump(0.8, lastJumpTime, targetPart.Position)
         end
 
         notifyStatus(
