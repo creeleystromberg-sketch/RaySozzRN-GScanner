@@ -59,6 +59,7 @@ end
 local function appendMetadata(values, instance)
     if not instance then return end
     values[#values + 1] = instance.Name
+    if instance:IsA("StringValue") then values[#values + 1] = instance.Value end
     for attributeName, attributeValue in pairs(instance:GetAttributes()) do
         values[#values + 1] = attributeName
         values[#values + 1] = attributeValue
@@ -120,6 +121,25 @@ local function forEachLocalInstance(container, callback)
     end
 end
 
+local function hasNamedDetail(container, exactNames, prefixes)
+    local matched = false
+    forEachLocalInstance(container, function(instance)
+        if matched then return end
+        local normalized = string.lower(string.gsub(instance.Name, "[^%w]+", ""))
+        if exactNames and exactNames[normalized] then
+            matched = true
+            return
+        end
+        for _, prefix in ipairs(prefixes or {}) do
+            if string.match(normalized, "^" .. prefix .. "%d+$") then
+                matched = true
+                return
+            end
+        end
+    end)
+    return matched
+end
+
 local function forEachAppearanceColor(container, callback)
     local function inspect(instance)
         if instance:IsA("BasePart") and instance.Transparency < 0.95 then
@@ -149,16 +169,19 @@ local function looksLikeEternalFlame(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
     if not container then return false end
-    local warmEffects, coolBlue = 0, 0
+    local orangeSources, coolBlueSources = {}, {}
     forEachAppearanceColor(container, function(color, source)
         local isEffect = source:IsA("Fire") or source:IsA("ParticleEmitter")
             or source:IsA("Trail") or source:IsA("Beam")
             or source:IsA("PointLight") or source:IsA("SpotLight") or source:IsA("SurfaceLight")
             or (source:IsA("BasePart") and source.Material == Enum.Material.Neon)
-        if isEffect and isWarmFlameColor(color) then warmEffects += 1 end
-        if color.B >= 0.32 and color.B > color.R * 1.08 and color.B >= color.G then coolBlue += 1 end
+        local isOrange = isWarmFlameColor(color) and color.G <= 0.62 and color.B <= 0.34
+        if isEffect and isOrange then orangeSources[source] = true end
+        if color.B >= 0.32 and color.B > color.R * 1.08 and color.B >= color.G then
+            coolBlueSources[source] = true
+        end
     end)
-    return warmEffects > 0 and coolBlue == 0
+    return next(orangeSources) ~= nil and next(coolBlueSources) == nil
 end
 
 local function looksLikePieceOfStar(prompt, model)
@@ -168,22 +191,12 @@ local function looksLikePieceOfStar(prompt, model)
 
     local yellowSources, coolBlueSources = {}, {}
     local yellowEmitter = false
-    local namedStarDetail = false
     local starDetailNames = {
         star = true, stars = true, sparkle = true, sparkles = true,
         starmesh = true, stardecal = true, startexture = true,
         starparticle = true, starparticles = true,
     }
-    local function inspectName(instance)
-        local normalized = string.lower(string.gsub(instance.Name, "[^%w]+", ""))
-        if starDetailNames[normalized]
-            or string.match(normalized, "^star%d+$")
-            or string.match(normalized, "^sparkle%d+$") then
-            namedStarDetail = true
-        end
-    end
-
-    forEachLocalInstance(container, inspectName)
+    local namedStarDetail = hasNamedDetail(container, starDetailNames, { "star", "sparkle" })
     forEachAppearanceColor(container, function(color, source)
         if color.R >= 0.62 and color.G >= 0.5 and color.B <= 0.48 then
             yellowSources[source] = true
@@ -217,18 +230,32 @@ local function looksLikeNullItem(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
     if not container then return false end
-    local grayscale, colored, vivid = 0, 0, 0
-    forEachAppearanceColor(container, function(color)
+    local namedNull = hasNamedDetail(container, {
+        null = true, nullcube = true, voidcube = true,
+        glitch = true, glitcheffect = true, glitchparticle = true,
+    }, { "null", "glitch" })
+    local grayscale, colored, vivid, grayCubes = 0, 0, 0, 0
+    local darkEffectSources = {}
+    forEachAppearanceColor(container, function(color, source)
         local highest = math.max(color.R, color.G, color.B)
         local lowest = math.min(color.R, color.G, color.B)
+        local isGray = highest - lowest <= 0.12 and (color.R + color.G + color.B) / 3 <= 0.68
         colored += 1
-        if highest - lowest <= 0.12 and (color.R + color.G + color.B) / 3 <= 0.68 then
+        if isGray then
             grayscale += 1
         elseif highest >= 0.55 and highest - lowest >= 0.28 then
             vivid += 1
         end
+        if source:IsA("BasePart") and isGray then
+            local size = source.Size
+            local shortest = math.max(math.min(size.X, size.Y, size.Z), 0.01)
+            if math.max(size.X, size.Y, size.Z) / shortest <= 1.4 then grayCubes += 1 end
+        end
+        local isGlitchEffect = source:IsA("ParticleEmitter") or source:IsA("Trail") or source:IsA("Beam")
+        if isGlitchEffect and highest <= 0.28 then darkEffectSources[source] = true end
     end)
-    return colored > 0 and vivid == 0 and grayscale / colored >= 0.4
+    local structuralNull = grayCubes >= 1 and next(darkEffectSources) ~= nil
+    return colored > 0 and vivid == 0 and grayscale / colored >= 0.4 and (namedNull or structuralNull)
 end
 
 local function appearanceFeatures(prompt, model)
@@ -237,7 +264,7 @@ local function appearanceFeatures(prompt, model)
     local features = {
         cyan = 0, deepBlue = 0, white = 0, gray = 0,
         gold = 0, brown = 0, effects = 0, smoke = 0,
-        elongatedBlue = 0, elongatedGold = 0,
+        elongatedBlue = 0, elongatedGold = 0, roundCyan = 0,
     }
     forEachAppearanceColor(container, function(color, source)
         local highest = math.max(color.R, color.G, color.B)
@@ -256,9 +283,12 @@ local function appearanceFeatures(prompt, model)
             local size = source.Size
             local shortest = math.max(math.min(size.X, size.Y, size.Z), 0.01)
             local aspect = math.max(size.X, size.Y, size.Z) / shortest
-            if aspect >= 1.8 and (color.B >= 0.35 or color.G >= 0.5) then features.elongatedBlue += 1 end
-            if aspect >= 1.8 and color.R >= 0.56 and color.G >= 0.34 and color.B <= 0.32 then
+            if aspect >= 2.8 and (color.B >= 0.35 or color.G >= 0.5) then features.elongatedBlue += 1 end
+            if aspect >= 2.8 and color.R >= 0.56 and color.G >= 0.34 and color.B <= 0.32 then
                 features.elongatedGold += 1
+            end
+            if aspect <= 1.35 and color.G >= 0.48 and color.B >= 0.48 and color.R <= 0.62 then
+                features.roundCyan += 1
             end
         end
     end)
@@ -271,19 +301,40 @@ local function looksLikeWindEssence(prompt, model)
 end
 
 local function looksLikeRainyBottle(prompt, model)
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
     local f = appearanceFeatures(prompt, model)
-    return f and f.deepBlue >= 1 and f.gray >= 1 and f.smoke >= 1
+    local namedWeather = hasNamedDetail(container, {
+        rain = true, rainy = true, cloud = true, storm = true,
+        raincloud = true, stormcloud = true, cloudmesh = true,
+        rainparticle = true, raineffect = true, cloudparticle = true,
+    }, { "rain", "cloud", "storm" })
+    local strongCloudShape = f and f.deepBlue >= 2 and f.gray >= 2
+    return f and f.deepBlue >= 1 and f.gray >= 1
+        and (f.smoke >= 1 or namedWeather or strongCloudShape)
 end
 
 local function looksLikeIcicle(prompt, model)
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
     local f = appearanceFeatures(prompt, model)
-    return f and f.elongatedBlue >= 1 and (f.cyan >= 1 or f.deepBlue >= 1) and f.effects == 0
-        and f.gold == 0 and f.brown <= 1
+    local namedIce = hasNamedDetail(container, {
+        ice = true, icicle = true, iciclemesh = true,
+        iceshard = true, icecrystal = true,
+    }, { "icicle", "iceshard", "icecrystal" })
+    return f and (namedIce or f.elongatedBlue >= 1) and (f.cyan >= 1 or f.deepBlue >= 1)
+        and f.roundCyan == 0 and f.effects == 0 and f.gold == 0 and f.brown <= 1
 end
 
 local function looksLikeFeatherVial(prompt, model)
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
     local f = appearanceFeatures(prompt, model)
-    return f and f.elongatedGold >= 1 and f.gold >= 1 and f.white >= 1
+    local namedFeather = hasNamedDetail(container, {
+        feather = true, feathers = true, plume = true,
+        feathermesh = true, featherdecal = true,
+    }, { "feather", "plume" })
+    return f and f.gold >= 1 and (namedFeather or (f.elongatedGold >= 1 and f.white >= 1))
         and f.deepBlue == 0 and f.brown <= 1
 end
 
@@ -292,8 +343,34 @@ local function looksLikeHourGlass(prompt, model)
     return f and f.gold >= 2 and f.brown >= 1 and f.cyan == 0 and f.deepBlue == 0
 end
 
-function Scanner.Identify(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled or isBlacklisted(prompt) then
+local function collectPromptMetadata(prompt, model, part)
+    local values = {}
+    appendMetadata(values, prompt)
+    local current = prompt.Parent
+    while current and current ~= Workspace and current ~= game do
+        appendMetadata(values, current)
+        if current == model then break end
+        current = current.Parent
+    end
+
+    appendMetadata(values, part)
+    for _, descendant in ipairs(part:GetDescendants()) do appendMetadata(values, descendant) end
+    for _, connected in ipairs(connectedItemParts(part)) do
+        appendMetadata(values, connected)
+        for _, descendant in ipairs(connected:GetDescendants()) do appendMetadata(values, descendant) end
+    end
+
+    local localContainer = appearanceContainer(prompt, model)
+    if localContainer and localContainer ~= part then
+        appendMetadata(values, localContainer)
+        for _, descendant in ipairs(localContainer:GetDescendants()) do appendMetadata(values, descendant) end
+    end
+    return values, localContainer
+end
+
+function Scanner.Identify(prompt, allowDisabled)
+    if not prompt or not prompt:IsA("ProximityPrompt")
+        or (not allowDisabled and not prompt.Enabled) or isBlacklisted(prompt) then
         return nil, nil, nil
     end
     local model = prompt:FindFirstAncestorOfClass("Model")
@@ -304,34 +381,9 @@ function Scanner.Identify(prompt)
     if name then return name, biome, part end
     if not isCollectionInteraction(prompt) then return nil, nil, nil end
 
-    local values = {}
-    appendMetadata(values, prompt)
-    local current = prompt.Parent
-    while current and current ~= Workspace and current ~= game do
-        appendMetadata(values, current)
-        if current == model then break end
-        current = current.Parent
-    end
-
-    -- Only inspect the prompt's physical item. Scanning the full enclosing model
-    -- mixes metadata when several spawned materials share one container.
-    appendMetadata(values, part)
-    for _, descendant in ipairs(part:GetDescendants()) do
-        appendMetadata(values, descendant)
-    end
-    for _, connected in ipairs(connectedItemParts(part)) do
-        appendMetadata(values, connected)
-        for _, descendant in ipairs(connected:GetDescendants()) do appendMetadata(values, descendant) end
-    end
-
-    local localContainer = appearanceContainer(prompt, model)
-    if localContainer and localContainer ~= part then
-        appendMetadata(values, localContainer)
-        for _, descendant in ipairs(localContainer:GetDescendants()) do
-            appendMetadata(values, descendant)
-        end
-    end
-
+    -- Only inspect the prompt's local item/assembly, never every sibling in a
+    -- shared SpawnedItems or Map container.
+    local values = collectPromptMetadata(prompt, model, part)
     if containsExcludedPickup(values) then return nil, nil, nil end
     name, biome = Database.Classify(values)
     if name then return name, biome, part end
@@ -345,6 +397,92 @@ function Scanner.Identify(prompt)
     if looksLikeHourGlass(prompt, model) then return "Hour Glass", "Sandstorm", part end
     if looksLikeNullItem(prompt, model) then return "NULL?", "Null", part end
     return nil, nil, nil
+end
+
+local function safePath(instance)
+    if not instance then return "<none>" end
+    local ok, path = pcall(function() return instance:GetFullName() end)
+    return ok and path or instance.Name
+end
+
+function Scanner.DescribePrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return "No valid ProximityPrompt." end
+    local model = prompt:FindFirstAncestorOfClass("Model")
+    local part = resolvePart(prompt, model)
+    local values, container = {}, nil
+    if part then values, container = collectPromptMetadata(prompt, model, part) end
+    local detectedName, detectedBiome = Scanner.Identify(prompt, true)
+    local lines = {
+        "SOL'S TRACKER PICKUP INSPECTOR",
+        "ActionText: " .. tostring(prompt.ActionText),
+        "ObjectText: " .. tostring(prompt.ObjectText),
+        "Prompt: " .. safePath(prompt),
+        "Part: " .. safePath(part),
+        "Model: " .. safePath(model),
+        "Enabled: " .. tostring(prompt.Enabled),
+        "Environment blocked: " .. tostring(isBlacklisted(prompt)),
+        "Pickup metadata blocked: " .. tostring(containsExcludedPickup(values)),
+        "Tracker result: " .. (detectedName and (detectedName .. " (" .. detectedBiome .. ")") or "not classified"),
+        "",
+        "ANCESTORS:",
+    }
+
+    local current, ancestorCount = prompt.Parent, 0
+    while current and current ~= game and ancestorCount < 14 do
+        lines[#lines + 1] = string.format("- [%s] %s", current.ClassName, current.Name)
+        if current == Workspace then break end
+        current = current.Parent
+        ancestorCount += 1
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "METADATA VALUES:"
+    local seenValues = {}
+    for _, value in ipairs(values) do
+        local text = tostring(value)
+        if text ~= "" and not seenValues[text] then
+            seenValues[text] = true
+            lines[#lines + 1] = "- " .. text
+        end
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "LOCAL INSTANCES:"
+    local instanceCount = 0
+    if container then
+        forEachLocalInstance(container, function(instance)
+            if instanceCount >= 60 then return end
+            if instance:IsA("BasePart") then
+                local color = instance.Color
+                local assetInfo = ""
+                if instance:IsA("MeshPart") then
+                    assetInfo = " | Mesh " .. tostring(instance.MeshId) .. " | Texture " .. tostring(instance.TextureID)
+                end
+                lines[#lines + 1] = string.format(
+                    "- [%s] %s | RGB %d,%d,%d | Size %.2f,%.2f,%.2f | %s%s",
+                    instance.ClassName, instance.Name,
+                    math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5),
+                    instance.Size.X, instance.Size.Y, instance.Size.Z, tostring(instance.Material), assetInfo
+                )
+                instanceCount += 1
+            elseif instance:IsA("ParticleEmitter") or instance:IsA("Smoke") or instance:IsA("Fire")
+                or instance:IsA("Trail") or instance:IsA("Beam") or instance:IsA("Decal")
+                or instance:IsA("Texture") then
+                local texture = ""
+                if instance:IsA("ParticleEmitter") or instance:IsA("Decal") or instance:IsA("Texture") then
+                    texture = " | Texture " .. tostring(instance.Texture)
+                end
+                lines[#lines + 1] = string.format("- [%s] %s%s", instance.ClassName, instance.Name, texture)
+                instanceCount += 1
+            end
+        end)
+    end
+    if instanceCount == 0 then lines[#lines + 1] = "- none captured" end
+    return table.concat(lines, "\n")
+end
+
+function Scanner.IsCollectionPrompt(prompt)
+    return prompt and prompt:IsA("ProximityPrompt") and isCollectionInteraction(prompt)
 end
 
 local function register(instance)

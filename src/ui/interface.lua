@@ -1,4 +1,5 @@
 local Players = game:GetService("Players")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 
 local UI = {}
 local player = Players.LocalPlayer
@@ -10,6 +11,7 @@ local gui, main, miniButton
 local trackerEnabled = false
 local materialRows = {}
 local respawnConnection = nil
+local promptTriggeredConnection = nil
 local runToken = 0
 
 local function uiCorner(parent, radius)
@@ -70,6 +72,10 @@ function UI.Init(deps)
         if respawnConnection then
             respawnConnection:Disconnect()
             respawnConnection = nil
+        end
+        if promptTriggeredConnection then
+            promptTriggeredConnection:Disconnect()
+            promptTriggeredConnection = nil
         end
         Scanner.Destroy()
         Visuals.Clear()
@@ -193,6 +199,7 @@ function UI.BuildMain()
 
     local materialsPage = makePage("Materials")
     local trackerPage = makePage("Tracker")
+    local inspectorPage = makePage("Inspector")
     local playerPage = makePage("Player")
     local serverPage = makePage("Server")
 
@@ -200,6 +207,7 @@ function UI.BuildMain()
     local trackTab = makeTab("Tracker", 48)
     local playTab = makeTab("Player", 89)
     local servTab = makeTab("Server", 130)
+    local inspectTab = makeTab("Inspector", 171)
 
     local function showPage(name)
         for pName, p in pairs(pages) do p.Visible = (pName == name) end
@@ -213,6 +221,7 @@ function UI.BuildMain()
     trackTab.MouseButton1Click:Connect(function() showPage("Tracker") end)
     playTab.MouseButton1Click:Connect(function() showPage("Player") end)
     servTab.MouseButton1Click:Connect(function() showPage("Server") end)
+    inspectTab.MouseButton1Click:Connect(function() showPage("Inspector") end)
 
     -- Build Materials Page
     local matList = Instance.new("ScrollingFrame")
@@ -284,6 +293,95 @@ function UI.BuildMain()
         UI.ToggleTracker()
         trackBtn.Text = trackerEnabled and "TRACK ITEMS: ON" or "TRACK ITEMS: OFF"
         trackBtn.BackgroundColor3 = trackerEnabled and Color3.fromRGB(92, 68, 18) or Color3.fromRGB(32, 35, 42)
+    end)
+
+    -- Build Pickup Inspector Page
+    local inspectStatus = Instance.new("TextLabel")
+    inspectStatus.Size = UDim2.new(1, -176, 0, 34)
+    inspectStatus.Position = UDim2.fromOffset(0, 0)
+    inspectStatus.BackgroundTransparency = 1
+    inspectStatus.Text = "Waiting for a ProximityPrompt interaction..."
+    inspectStatus.TextColor3 = Config.Colors.TextSecondary
+    inspectStatus.TextSize = 11
+    inspectStatus.Font = Enum.Font.Gotham
+    inspectStatus.TextXAlignment = Enum.TextXAlignment.Left
+    inspectStatus.TextWrapped = true
+    inspectStatus.Parent = inspectorPage
+
+    local copyInspect = Instance.new("TextButton")
+    copyInspect.Size = UDim2.fromOffset(82, 30)
+    copyInspect.Position = UDim2.new(1, -170, 0, 2)
+    copyInspect.BackgroundColor3 = Config.Colors.Accent
+    copyInspect.BorderSizePixel = 0
+    copyInspect.Text = "COPY"
+    copyInspect.TextColor3 = Config.Colors.TextPrimary
+    copyInspect.TextSize = 11
+    copyInspect.Font = Enum.Font.GothamBold
+    copyInspect.Parent = inspectorPage
+    uiCorner(copyInspect, 6)
+
+    local clearInspect = Instance.new("TextButton")
+    clearInspect.Size = UDim2.fromOffset(82, 30)
+    clearInspect.Position = UDim2.new(1, -82, 0, 2)
+    clearInspect.BackgroundColor3 = Color3.fromRGB(32, 35, 42)
+    clearInspect.BorderSizePixel = 0
+    clearInspect.Text = "CLEAR"
+    clearInspect.TextColor3 = Config.Colors.TextPrimary
+    clearInspect.TextSize = 11
+    clearInspect.Font = Enum.Font.GothamBold
+    clearInspect.Parent = inspectorPage
+    uiCorner(clearInspect, 6)
+
+    local inspectScroll = Instance.new("ScrollingFrame")
+    inspectScroll.Size = UDim2.new(1, 0, 1, -42)
+    inspectScroll.Position = UDim2.fromOffset(0, 42)
+    inspectScroll.BackgroundColor3 = Color3.fromRGB(12, 13, 16)
+    inspectScroll.BorderSizePixel = 0
+    inspectScroll.ScrollBarThickness = 5
+    inspectScroll.AutomaticCanvasSize = Enum.AutomaticSize.XY
+    inspectScroll.CanvasSize = UDim2.fromOffset(0, 0)
+    inspectScroll.Parent = inspectorPage
+    uiCorner(inspectScroll, 8)
+
+    local inspectPadding = Instance.new("UIPadding")
+    inspectPadding.PaddingTop = UDim.new(0, 9)
+    inspectPadding.PaddingBottom = UDim.new(0, 9)
+    inspectPadding.PaddingLeft = UDim.new(0, 9)
+    inspectPadding.PaddingRight = UDim.new(0, 9)
+    inspectPadding.Parent = inspectScroll
+
+    local inspectReport = Instance.new("TextLabel")
+    inspectReport.Size = UDim2.fromOffset(490, 20)
+    inspectReport.AutomaticSize = Enum.AutomaticSize.XY
+    inspectReport.BackgroundTransparency = 1
+    inspectReport.Text = "Interact with an item. Its internal prompt, model, attributes, tags, parts and colors will appear here."
+    inspectReport.TextColor3 = Color3.fromRGB(205, 209, 218)
+    inspectReport.TextSize = 11
+    inspectReport.Font = Enum.Font.Code
+    inspectReport.TextXAlignment = Enum.TextXAlignment.Left
+    inspectReport.TextYAlignment = Enum.TextYAlignment.Top
+    inspectReport.Parent = inspectScroll
+
+    copyInspect.MouseButton1Click:Connect(function()
+        local copied = Server.Copy(inspectReport.Text)
+        inspectStatus.Text = copied and "Inspector report copied." or "Clipboard is unavailable in this executor."
+    end)
+    clearInspect.MouseButton1Click:Connect(function()
+        inspectReport.Text = "Waiting for the next interaction..."
+        inspectStatus.Text = "Inspector cleared."
+    end)
+
+    promptTriggeredConnection = ProximityPromptService.PromptTriggered:Connect(function(prompt, triggeringPlayer)
+        if triggeringPlayer and triggeringPlayer ~= player then return end
+        if not Scanner.IsCollectionPrompt(prompt) then return end
+        local ok, report = pcall(Scanner.DescribePrompt, prompt)
+        if ok then
+            inspectReport.Text = report
+            inspectStatus.Text = "Captured: " .. tostring(prompt.ObjectText ~= "" and prompt.ObjectText or prompt.ActionText)
+            environment.SolsTrackerLastInspection = report
+        else
+            inspectStatus.Text = "Inspector failed: " .. tostring(report)
+        end
     end)
 
     -- Build Player Page
