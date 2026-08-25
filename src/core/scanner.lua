@@ -65,6 +65,39 @@ local function appearanceContainer(prompt, model)
     return resolvePart(prompt, model) or prompt.Parent
 end
 
+local function forEachAppearanceColor(container, callback)
+    local function inspect(instance)
+        if instance:IsA("BasePart") and instance.Transparency < 0.95 then
+            callback(instance.Color)
+        elseif instance:IsA("PointLight") or instance:IsA("SpotLight") or instance:IsA("SurfaceLight") then
+            callback(instance.Color)
+        elseif instance:IsA("Fire") then
+            callback(instance.Color)
+            callback(instance.SecondaryColor)
+        elseif instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") then
+            for _, keypoint in ipairs(instance.Color.Keypoints) do callback(keypoint.Value) end
+        end
+    end
+
+    inspect(container)
+    for _, descendant in ipairs(container:GetDescendants()) do inspect(descendant) end
+end
+
+local function isWarmFlameColor(color)
+    return color.R >= 0.65 and color.R > color.B * 1.35 and color.R > color.G * 1.04
+end
+
+local function looksLikeEternalFlame(prompt, model)
+    if not isCollectionInteraction(prompt) then return false end
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
+    local warmColors = 0
+    forEachAppearanceColor(container, function(color)
+        if isWarmFlameColor(color) then warmColors += 1 end
+    end)
+    return warmColors > 0
+end
+
 local function looksLikeCurruptaine(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
@@ -85,20 +118,18 @@ local function looksLikeNullItem(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
     if not container then return false end
-    local grayscale, colored = 0, 0
-    local candidates = container:IsA("BasePart") and { container } or container:GetDescendants()
-    for _, instance in ipairs(candidates) do
-        if instance:IsA("BasePart") and instance.Transparency < 0.95 then
-            local color = instance.Color
-            local highest = math.max(color.R, color.G, color.B)
-            local lowest = math.min(color.R, color.G, color.B)
-            colored += 1
-            if highest - lowest <= 0.12 and (color.R + color.G + color.B) / 3 <= 0.68 then
-                grayscale += 1
-            end
+    local grayscale, colored, vivid = 0, 0, 0
+    forEachAppearanceColor(container, function(color)
+        local highest = math.max(color.R, color.G, color.B)
+        local lowest = math.min(color.R, color.G, color.B)
+        colored += 1
+        if highest - lowest <= 0.12 and (color.R + color.G + color.B) / 3 <= 0.68 then
+            grayscale += 1
+        elseif highest >= 0.55 and highest - lowest >= 0.28 then
+            vivid += 1
         end
-    end
-    return colored > 0 and grayscale / colored >= 0.4
+    end)
+    return colored > 0 and vivid == 0 and grayscale / colored >= 0.4
 end
 
 function Scanner.Identify(prompt)
@@ -131,6 +162,7 @@ function Scanner.Identify(prompt)
 
     name, biome = Database.Classify(values)
     if name then return name, biome, part end
+    if looksLikeEternalFlame(prompt, model) then return "Eternal Flame", "Hell", part end
     if looksLikeCurruptaine(prompt, model) then return "Curruptaine", "Corruption", part end
     if looksLikeNullItem(prompt, model) then return "NULL?", "Null", part end
     return nil, nil, nil
