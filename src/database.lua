@@ -17,7 +17,14 @@ Database.EnvironmentBlacklist = {
     "bank", "cauldron", "altar", "portal", "teleport", "leaderboard",
     "turret", "clover", "four leaf", "luck buff", "offer", "required",
     "requires", "submit", "sacrifice", "talk", "speak", "chat",
-    "memory match", "ready", "roll",
+    "memory match", "ready", "roll", "potion", "speedpotion", "luckypotion",
+    "hastepotion", "fortunepotion", "coin", "rune", "chest", "candy",
+}
+
+-- These can also appear only in attributes or CollectionService tags while the
+-- visible prompt says merely "Pick up".
+Database.PickupBlacklist = {
+    "potion", "elixir", "tonic", "coin", "rune", "chest", "candy",
 }
 
 local rules = {
@@ -30,7 +37,7 @@ local rules = {
     },
     ["Rainy Bottle"] = {
         { "rainy bottle", 120 }, { "rain bottle", 100 },
-        { "bottle", 35 }, { "rainy", 12 }, { "rain", 8 },
+        { "bottle", 15 }, { "rainy", 12 }, { "rain", 8 },
     },
     ["Hour Glass"] = {
         { "hour glass", 120 }, { "hourglass", 120 },
@@ -41,11 +48,11 @@ local rules = {
         { "hell", 12 }, { "fire", 10 },
     },
     ["Piece of Star"] = {
-        { "piece of star", 140 }, { "starfall", 40 },
-        { "meteor", 35 }, { "comet", 35 }, { "star", 12 },
+        { "piece of star", 140 }, { "starfall", 15 },
+        { "meteor", 25 }, { "comet", 25 }, { "star", 12 },
     },
     ["Feather Vial"] = {
-        { "feather vial", 140 }, { "feather", 60 }, { "vial", 50 }, { "heaven", 10 },
+        { "feather vial", 140 }, { "feather", 60 }, { "vial", 15 }, { "heaven", 10 },
     },
     ["Curruptaine"] = {
         { "curruptaine", 160 }, { "corruptaine", 160 }, { "curruptain", 150 },
@@ -57,16 +64,35 @@ local rules = {
     },
 }
 
+local function normalizeWords(value)
+    local normalized = string.lower(tostring(value or ""))
+    normalized = string.gsub(normalized, "[^%w]+", " ")
+    normalized = string.gsub(normalized, "%s+", " ")
+    normalized = string.gsub(normalized, "^%s+", "")
+    return string.gsub(normalized, "%s+$", "")
+end
+
 function Database.Classify(values)
     local scores = {}
     for material in pairs(Database.Materials) do scores[material] = 0 end
 
+    local seenValues = {}
+
     for _, value in ipairs(values or {}) do
-        local text = string.lower(tostring(value or ""))
-        if text ~= "" then
+        local text = normalizeWords(value)
+        if text ~= "" and not seenValues[text] then
+            seenValues[text] = true
+            local words = " " .. text .. " "
+            local compactText = string.gsub(text, " ", "")
             for material, signatures in pairs(rules) do
                 for _, signature in ipairs(signatures) do
-                    if string.find(text, signature[1], 1, true) then
+                    local signatureWords = normalizeWords(signature[1])
+                    local matched = string.find(words, " " .. signatureWords .. " ", 1, true) ~= nil
+                    if not matched and string.find(signatureWords, " ", 1, true) then
+                        local compactSignature = string.gsub(signatureWords, " ", "")
+                        matched = compactSignature ~= "" and string.find(compactText, compactSignature, 1, true) ~= nil
+                    end
+                    if matched then
                         scores[material] += signature[2]
                     end
                 end
@@ -78,7 +104,9 @@ function Database.Classify(values)
     for material, score in pairs(scores) do
         if score > bestScore then bestName, bestScore = material, score end
     end
-    if not bestName or bestScore < 10 then return nil, nil, 0 end
+    -- Generic words such as "bottle", biome names and effect names are useful
+    -- supporting evidence, but must never identify an item on their own.
+    if not bestName or bestScore < 50 then return nil, nil, 0 end
     return bestName, Database.Materials[bestName].Biome, bestScore
 end
 

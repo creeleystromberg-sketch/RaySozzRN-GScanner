@@ -105,7 +105,9 @@ function Visuals.Create(entry, guiParent)
 
     local highlight = Instance.new("Highlight")
     highlight.Name = "SolsTrackerHighlight"
-    highlight.Adornee = entry.part:FindFirstAncestorOfClass("Model") or entry.part
+    -- A prompt can live under a shared SpawnedItems/Map model. Highlighting the
+    -- ancestor model would outline unrelated objects, so keep the adornment local.
+    highlight.Adornee = entry.part
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.FillColor = Color3.fromRGB(235, 238, 244)
     highlight.FillTransparency = 0.88
