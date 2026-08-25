@@ -76,6 +76,8 @@ local function forEachAppearanceColor(container, callback)
             callback(instance.SecondaryColor)
         elseif instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") then
             for _, keypoint in ipairs(instance.Color.Keypoints) do callback(keypoint.Value) end
+        elseif instance:IsA("Decal") or instance:IsA("Texture") then
+            callback(instance.Color3)
         end
     end
 
@@ -84,18 +86,45 @@ local function forEachAppearanceColor(container, callback)
 end
 
 local function isWarmFlameColor(color)
-    return color.R >= 0.65 and color.R > color.B * 1.35 and color.R > color.G * 1.04
+    return color.R >= 0.65 and color.R - color.G >= 0.16 and color.R > color.B * 1.35
 end
 
 local function looksLikeEternalFlame(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
     if not container then return false end
-    local warmColors = 0
+    local warmColors, coolBlue = 0, 0
     forEachAppearanceColor(container, function(color)
         if isWarmFlameColor(color) then warmColors += 1 end
+        if color.B >= 0.32 and color.B > color.R * 1.08 and color.B >= color.G then coolBlue += 1 end
     end)
-    return warmColors > 0
+    return warmColors > 0 and coolBlue == 0
+end
+
+local function looksLikePieceOfStar(prompt, model)
+    if not isCollectionInteraction(prompt) then return false end
+    local container = appearanceContainer(prompt, model)
+    if not container then return false end
+
+    local yellow, coolBlue = 0, 0
+    forEachAppearanceColor(container, function(color)
+        if color.R >= 0.62 and color.G >= 0.5 and color.B <= 0.48 then
+            yellow += 1
+        elseif color.B >= 0.32 and color.B > color.R * 1.08 and color.B >= color.G then
+            coolBlue += 1
+        end
+    end)
+
+    local namedStar = string.find(string.lower(container.Name), "star", 1, true) ~= nil
+    if not namedStar then
+        for _, descendant in ipairs(container:GetDescendants()) do
+            if string.find(string.lower(descendant.Name), "star", 1, true) then
+                namedStar = true
+                break
+            end
+        end
+    end
+    return namedStar or (yellow >= 1 and coolBlue >= 1)
 end
 
 local function looksLikeCurruptaine(prompt, model)
@@ -163,6 +192,7 @@ function Scanner.Identify(prompt)
     name, biome = Database.Classify(values)
     if name then return name, biome, part end
     if looksLikeEternalFlame(prompt, model) then return "Eternal Flame", "Hell", part end
+    if looksLikePieceOfStar(prompt, model) then return "Piece of Star", "Starfall", part end
     if looksLikeCurruptaine(prompt, model) then return "Curruptaine", "Corruption", part end
     if looksLikeNullItem(prompt, model) then return "NULL?", "Null", part end
     return nil, nil, nil

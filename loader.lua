@@ -1,6 +1,6 @@
 -- Sol's RNG material tracker
 local REPO_URL = "https://raw.githubusercontent.com/creeleystromberg-sketch/RaySozzRN-GScanner/main/src/"
-local RELEASE = "tracker-003"
+local RELEASE = "tracker-004"
 
 local function import(path)
     local ok, source = pcall(function()
