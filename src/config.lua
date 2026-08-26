@@ -1,6 +1,6 @@
 local Config = {
     Version = "v1.0.0",
-    Build = "TRACKER-011",
+    Build = "TRACKER-012",
     DefaultSpeed = 18,
     
     -- Scanner
@@ -8,7 +8,7 @@ local Config = {
     FullRescanInterval = 15.0,
     AutoStartTracker = true,
     CalibrationMode = false,
-    MaterialPromptDistance = 20.0,
+    MaterialPromptDistance = 100.0,
     
     -- UI Colors & Dimensions
     Colors = {

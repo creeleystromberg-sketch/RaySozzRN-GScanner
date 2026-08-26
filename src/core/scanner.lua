@@ -425,7 +425,7 @@ function Scanner.Identify(prompt, allowDisabled)
     local function identified(name, biome)
         if not allowDisabled then
             pcall(function()
-                local distance = (Config and Config.MaterialPromptDistance) or 20
+                local distance = (Config and Config.MaterialPromptDistance) or 100
                 prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, distance)
             end)
         end
