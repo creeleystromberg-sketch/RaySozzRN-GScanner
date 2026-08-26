@@ -7,6 +7,10 @@ local knownPrompts, cachedPrompts, scannedEntries = {}, {}, {}
 local connections = {}
 local lastFullScan = 0
 
+local function usesBroadDetection()
+    return Config and Config.CalibrationMode == true
+end
+
 local function containsBlacklistedWord(text)
     local normalized = string.lower(tostring(text or ""))
     for _, word in ipairs(Database.EnvironmentBlacklist) do
@@ -175,18 +179,22 @@ local function looksLikeEternalFlame(prompt, model)
     if not isCollectionInteraction(prompt) then return false end
     local container = appearanceContainer(prompt, model)
     if not container then return false end
-    local orangeSources, coolBlueSources = {}, {}
+    local orangeSources, warmSources, coolBlueSources = {}, {}, {}
     forEachAppearanceColor(container, function(color, source)
         local isEffect = source:IsA("Fire") or source:IsA("ParticleEmitter")
             or source:IsA("Trail") or source:IsA("Beam")
             or source:IsA("PointLight") or source:IsA("SpotLight") or source:IsA("SurfaceLight")
             or (source:IsA("BasePart") and source.Material == Enum.Material.Neon)
         local isOrange = isWarmFlameColor(color) and color.G <= 0.62 and color.B <= 0.34
+        if isEffect and isWarmFlameColor(color) then warmSources[source] = true end
         if isEffect and isOrange then orangeSources[source] = true end
         if color.B >= 0.32 and color.B > color.R * 1.08 and color.B >= color.G then
             coolBlueSources[source] = true
         end
     end)
+    if usesBroadDetection() then
+        return next(warmSources) ~= nil and next(coolBlueSources) == nil
+    end
     return next(orangeSources) ~= nil and next(coolBlueSources) == nil
 end
 
@@ -214,6 +222,9 @@ local function looksLikePieceOfStar(prompt, model)
     local yellowCount, blueCount = 0, 0
     for _ in pairs(yellowSources) do yellowCount += 1 end
     for _ in pairs(coolBlueSources) do blueCount += 1 end
+    if usesBroadDetection() then
+        return namedStarDetail or (blueCount >= 1 and yellowCount >= 1)
+    end
     return blueCount >= 1 and (namedStarDetail or yellowCount >= 2 or yellowEmitter)
 end
 
@@ -261,6 +272,9 @@ local function looksLikeNullItem(prompt, model)
         if isGlitchEffect and highest <= 0.28 then darkEffectSources[source] = true end
     end)
     local structuralNull = grayCubes >= 1 and next(darkEffectSources) ~= nil
+    if usesBroadDetection() then
+        return colored > 0 and vivid == 0 and grayscale / colored >= 0.4
+    end
     return colored > 0 and vivid == 0 and grayscale / colored >= 0.4 and (namedNull or structuralNull)
 end
 
@@ -316,6 +330,9 @@ local function looksLikeRainyBottle(prompt, model)
         rainparticle = true, raineffect = true, cloudparticle = true,
     }, { "rain", "cloud", "storm" })
     local strongCloudShape = f and f.deepBlue >= 2 and f.gray >= 2
+    if usesBroadDetection() then
+        return f and f.deepBlue >= 1 and f.gray >= 1 and f.effects >= 1
+    end
     return f and f.deepBlue >= 1 and f.gray >= 1
         and (f.smoke >= 1 or namedWeather or strongCloudShape)
 end
@@ -328,6 +345,10 @@ local function looksLikeIcicle(prompt, model)
         ice = true, icicle = true, iciclemesh = true,
         iceshard = true, icecrystal = true,
     }, { "icicle", "iceshard", "icecrystal" })
+    if usesBroadDetection() then
+        return f and (f.cyan >= 1 or f.deepBlue >= 1) and f.effects == 0
+            and f.gold == 0 and f.brown <= 1
+    end
     return f and (namedIce or f.elongatedBlue >= 1) and (f.cyan >= 1 or f.deepBlue >= 1)
         and f.roundCyan == 0 and f.effects == 0 and f.gold == 0 and f.brown <= 1
 end
@@ -340,12 +361,18 @@ local function looksLikeFeatherVial(prompt, model)
         feather = true, feathers = true, plume = true,
         feathermesh = true, featherdecal = true,
     }, { "feather", "plume" })
+    if usesBroadDetection() then
+        return f and f.gold >= 1 and f.white >= 1 and f.deepBlue == 0 and f.brown <= 1
+    end
     return f and f.gold >= 1 and (namedFeather or (f.elongatedGold >= 1 and f.white >= 1))
         and f.deepBlue == 0 and f.brown <= 1
 end
 
 local function looksLikeHourGlass(prompt, model)
     local f = appearanceFeatures(prompt, model)
+    if usesBroadDetection() then
+        return f and f.gold >= 1 and f.brown >= 1 and f.cyan == 0 and f.deepBlue == 0
+    end
     return f and f.gold >= 2 and f.brown >= 1 and f.cyan == 0 and f.deepBlue == 0
 end
 

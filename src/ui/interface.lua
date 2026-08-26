@@ -274,7 +274,9 @@ function UI.BuildMain()
     navStatus.Position = UDim2.fromOffset(0, 75)
     navStatus.BackgroundColor3 = Config.Colors.Surface
     navStatus.BorderSizePixel = 0
-    navStatus.Text = "Tracker active\nFull map refresh every 15 seconds."
+    navStatus.Text = Config.CalibrationMode
+        and "Tracker active — broad calibration mode\nFull map refresh every 15 seconds."
+        or "Tracker active\nFull map refresh every 15 seconds."
     navStatus.TextColor3 = Config.Colors.TextPrimary
     navStatus.TextSize = 12
     navStatus.Font = Enum.Font.Gotham
@@ -530,7 +532,8 @@ function UI.BuildMain()
                 if ok then
                     Visuals.Update(entries, gui)
                     UI.RefreshMaterialRows(entries, matList, emptyLabel)
-                    navStatus.Text = "Tracker active\nFound: " .. #entries .. "\nFull refresh every 15 seconds."
+                    local mode = Config.CalibrationMode and " — broad calibration mode" or ""
+                    navStatus.Text = "Tracker active" .. mode .. "\nFound: " .. #entries .. "\nFull refresh every 15 seconds."
                 else
                     navStatus.Text = "Tracker retrying after scan error."
                 end
