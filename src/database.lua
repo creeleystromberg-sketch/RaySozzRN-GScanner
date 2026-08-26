@@ -30,12 +30,10 @@ Database.PickupBlacklist = {
 local rules = {
     ["Wind Essence"] = {
         { "wind essence", 120 }, { "windb", 80 }, { "windc", 80 },
-        { "1946917526", 20 }, { "12713360200", 20 }, { "13803462600", 20 },
         { "essence", 35 }, { "wind", 8 },
     },
     ["Icicle"] = {
-        { "icicle", 120 }, { "17413674509", 200 }, { "17413732419", 30 },
-        { "snowy", 15 }, { "snow", 10 }, { "ice", 8 },
+        { "icicle", 120 }, { "snowy", 15 }, { "snow", 10 }, { "ice", 8 },
     },
     ["Rainy Bottle"] = {
         { "rainy bottle", 120 }, { "rain bottle", 100 },
@@ -62,9 +60,73 @@ local rules = {
         { "corruption", 30 }, { "corrupted", 30 },
     },
     ["NULL?"] = {
-        { "null?", 140 }, { "null", 70 }, { "17052637850", 220 }, { "void", 25 },
+        { "null?", 140 }, { "null", 70 }, { "void", 25 },
     },
 }
+
+-- Captured from the user's live Pickup Inspector reports. Shared bottle/cork
+-- assets are intentionally absent: only details unique to a material are used.
+local fingerprintRules = {
+    { Name = "Curruptaine", Any = { "867619398" } },
+    { Name = "NULL?", All = { "17052637850" }, None = { "867619398", "neon" } },
+    { Name = "Hour Glass", Any = {
+        "103487498368597", "134010476647720", "86908839056700", "139156179732082",
+    } },
+    { Name = "Eternal Flame", Any = {
+        "17404800093", "17404800094", "17404800095", "17404846378",
+    } },
+    { Name = "Piece of Star", Any = { "17405368318", "6909741538" } },
+    { Name = "Rainy Bottle", Any = {
+        "17405284614", "17405360386", "17405505478",
+    } },
+    { Name = "Icicle", Any = { "17413674509" } },
+    { Name = "Feather Vial", Any = { "439102658" } },
+    { Name = "Wind Essence", Any = { "windb", "windc", "windglow" } },
+}
+
+local function valueTokens(values)
+    local tokens = {}
+    for _, value in ipairs(values or {}) do
+        local text = string.lower(tostring(value or ""))
+        local compact = string.gsub(text, "[^%w]+", "")
+        if text ~= "" then tokens[text] = true end
+        if compact ~= "" then tokens[compact] = true end
+        for word in string.gmatch(text, "%w+") do tokens[word] = true end
+    end
+    return tokens
+end
+
+local function containsAny(tokens, expected)
+    for _, token in ipairs(expected or {}) do
+        if tokens[token] then return true end
+    end
+    return false
+end
+
+local function containsAll(tokens, expected)
+    for _, token in ipairs(expected or {}) do
+        if not tokens[token] then return false end
+    end
+    return true
+end
+
+function Database.MatchFingerprint(values)
+    local tokens = valueTokens(values)
+    for _, rule in ipairs(fingerprintRules) do
+        local anyMatches = not rule.Any or containsAny(tokens, rule.Any)
+        local allMatches = not rule.All or containsAll(tokens, rule.All)
+        local noneMatches = not rule.None or not containsAny(tokens, rule.None)
+        if anyMatches and allMatches and noneMatches then
+            return rule.Name, Database.Materials[rule.Name].Biome, 1000
+        end
+    end
+    return nil, nil, 0
+end
+
+function Database.IsExcludedPickup(values)
+    local tokens = valueTokens(values)
+    return tokens.casing == true and tokens.liquid == true and tokens.top == true
+end
 
 local function normalizeWords(value)
     local normalized = string.lower(tostring(value or ""))

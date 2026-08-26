@@ -420,26 +420,39 @@ function Scanner.Identify(prompt, allowDisabled)
     local model = prompt:FindFirstAncestorOfClass("Model")
     local part = resolvePart(prompt, model)
     if not part then return nil, nil, nil end
-
-    local name, biome = Database.Classify({ prompt.ObjectText, prompt.ActionText })
-    if name then return name, biome, part end
     if not isCollectionInteraction(prompt) then return nil, nil, nil end
+
+    local function identified(name, biome)
+        if not allowDisabled then
+            pcall(function()
+                local distance = (Config and Config.MaterialPromptDistance) or 20
+                prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, distance)
+            end)
+        end
+        return name, biome, part
+    end
 
     -- Only inspect the prompt's local item/assembly, never every sibling in a
     -- shared SpawnedItems or Map container.
     local values = collectPromptMetadata(prompt, model, part)
-    if containsExcludedPickup(values) then return nil, nil, nil end
-    name, biome = Database.Classify(values)
-    if name then return name, biome, part end
-    if looksLikeEternalFlame(prompt, model) then return "Eternal Flame", "Hell", part end
-    if looksLikePieceOfStar(prompt, model) then return "Piece of Star", "Starfall", part end
-    if looksLikeCurruptaine(prompt, model) then return "Curruptaine", "Corruption", part end
-    if looksLikeWindEssence(prompt, model) then return "Wind Essence", "Windy", part end
-    if looksLikeRainyBottle(prompt, model) then return "Rainy Bottle", "Rainy", part end
-    if looksLikeIcicle(prompt, model) then return "Icicle", "Snowy", part end
-    if looksLikeFeatherVial(prompt, model) then return "Feather Vial", "Heaven", part end
-    if looksLikeHourGlass(prompt, model) then return "Hour Glass", "Sandstorm", part end
-    if looksLikeNullItem(prompt, model) then return "NULL?", "Null", part end
+    if containsExcludedPickup(values) or Database.IsExcludedPickup(values) then return nil, nil, nil end
+
+    local name, biome = Database.MatchFingerprint(values)
+    if name then return identified(name, biome) end
+
+    name, biome = Database.Classify({ prompt.ObjectText, prompt.ActionText })
+    if not name then name, biome = Database.Classify(values) end
+    if name then return identified(name, biome) end
+
+    if looksLikeEternalFlame(prompt, model) then return identified("Eternal Flame", "Hell") end
+    if looksLikePieceOfStar(prompt, model) then return identified("Piece of Star", "Starfall") end
+    if looksLikeCurruptaine(prompt, model) then return identified("Curruptaine", "Corruption") end
+    if looksLikeWindEssence(prompt, model) then return identified("Wind Essence", "Windy") end
+    if looksLikeRainyBottle(prompt, model) then return identified("Rainy Bottle", "Rainy") end
+    if looksLikeIcicle(prompt, model) then return identified("Icicle", "Snowy") end
+    if looksLikeFeatherVial(prompt, model) then return identified("Feather Vial", "Heaven") end
+    if looksLikeHourGlass(prompt, model) then return identified("Hour Glass", "Sandstorm") end
+    if looksLikeNullItem(prompt, model) then return identified("NULL?", "Null") end
     return nil, nil, nil
 end
 
@@ -455,6 +468,8 @@ function Scanner.DescribePrompt(prompt)
     local part = resolvePart(prompt, model)
     local values, container = {}, nil
     if part then values, container = collectPromptMetadata(prompt, model, part) end
+    local fingerprintName, fingerprintBiome = Database.MatchFingerprint(values)
+    local excludedPickup = containsExcludedPickup(values) or Database.IsExcludedPickup(values)
     local detectedName, detectedBiome = Scanner.Identify(prompt, true)
     local lines = {
         "SOL'S TRACKER PICKUP INSPECTOR",
@@ -464,8 +479,10 @@ function Scanner.DescribePrompt(prompt)
         "Part: " .. safePath(part),
         "Model: " .. safePath(model),
         "Enabled: " .. tostring(prompt.Enabled),
+        "MaxActivationDistance: " .. tostring(prompt.MaxActivationDistance),
         "Environment blocked: " .. tostring(isBlacklisted(prompt)),
-        "Pickup metadata blocked: " .. tostring(containsExcludedPickup(values)),
+        "Pickup metadata blocked: " .. tostring(excludedPickup),
+        "Exact fingerprint: " .. (fingerprintName and (fingerprintName .. " (" .. fingerprintBiome .. ")") or "none"),
         "Tracker result: " .. (detectedName and (detectedName .. " (" .. detectedBiome .. ")") or "not classified"),
         "",
         "ANCESTORS:",
@@ -536,6 +553,16 @@ local function register(instance)
     end
 end
 
+local function onDescendantAdded(instance)
+    register(instance)
+    if instance:IsA("ProximityPrompt") then return end
+    local model = instance:FindFirstAncestorOfClass("Model")
+    if not model then return end
+    for _, descendant in ipairs(model:GetDescendants()) do
+        if descendant:IsA("ProximityPrompt") then cachedPrompts[descendant] = nil end
+    end
+end
+
 function Scanner.FullRescan()
     knownPrompts = {}
     cachedPrompts = {}
@@ -548,7 +575,7 @@ function Scanner.Init(deps)
     Database.BroadMode = Config and Config.CalibrationMode == true
     for _, connection in ipairs(connections) do connection:Disconnect() end
     connections = {
-        Workspace.DescendantAdded:Connect(register),
+        Workspace.DescendantAdded:Connect(onDescendantAdded),
         Workspace.DescendantRemoving:Connect(function(instance)
             if instance:IsA("ProximityPrompt") then
                 knownPrompts[instance], cachedPrompts[instance] = nil, nil
