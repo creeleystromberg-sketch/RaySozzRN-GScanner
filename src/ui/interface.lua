@@ -1,5 +1,6 @@
 local Players = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
+local UserInputService = game:GetService("UserInputService")
 
 local UI = {}
 local player = Players.LocalPlayer
@@ -12,6 +13,7 @@ local trackerEnabled = false
 local materialRows = {}
 local respawnConnection = nil
 local promptTriggeredConnection = nil
+local pickupAssistConnection = nil
 local runToken = 0
 
 local function uiCorner(parent, radius)
@@ -78,6 +80,10 @@ function UI.Init(deps)
         if promptTriggeredConnection then
             promptTriggeredConnection:Disconnect()
             promptTriggeredConnection = nil
+        end
+        if pickupAssistConnection then
+            pickupAssistConnection:Disconnect()
+            pickupAssistConnection = nil
         end
         Scanner.Destroy()
         Visuals.Clear()
@@ -278,7 +284,7 @@ function UI.BuildMain()
     navStatus.BorderSizePixel = 0
     navStatus.Text = Config.CalibrationMode
         and "Tracker active — broad calibration mode\nFull map refresh every 15 seconds."
-        or "Tracker active\nFull map refresh every 15 seconds."
+        or "Tracker active\nE pickup assist: 15–100 studs.\nFull map refresh every 15 seconds."
     navStatus.TextColor3 = Config.Colors.TextPrimary
     navStatus.TextSize = 12
     navStatus.Font = Enum.Font.Gotham
@@ -297,6 +303,18 @@ function UI.BuildMain()
         UI.ToggleTracker()
         trackBtn.Text = trackerEnabled and "TRACK ITEMS: ON" or "TRACK ITEMS: OFF"
         trackBtn.BackgroundColor3 = trackerEnabled and Color3.fromRGB(92, 68, 18) or Color3.fromRGB(32, 35, 42)
+    end)
+
+    pickupAssistConnection = UserInputService.InputBegan:Connect(function(input)
+        if not trackerEnabled or UserInputService:GetFocusedTextBox() then return end
+        if input.KeyCode ~= (Config.RemotePickupKey or Enum.KeyCode.E) then return end
+
+        local ok, pickedUp, message = pcall(Scanner.TryPickupNearest)
+        if ok and pickedUp then
+            navStatus.Text = "Pickup assist sent\n" .. tostring(message)
+        elseif not ok then
+            navStatus.Text = "Pickup assist error: " .. tostring(pickedUp)
+        end
     end)
 
     -- Build Pickup Inspector Page
@@ -540,6 +558,7 @@ function UI.BuildMain()
                     local scanWarning = Scanner.GetLastError and Scanner.GetLastError() or nil
                     if renderOk then
                         navStatus.Text = "Tracker active" .. mode .. "\nFound: " .. #entries
+                            .. "\nE pickup assist: 15–100 studs."
                             .. (scanWarning and ("\nSkipped error: " .. scanWarning) or "\nFull refresh every 15 seconds.")
                     else
                         navStatus.Text = "Visual update error: " .. tostring(renderError)

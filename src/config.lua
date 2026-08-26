@@ -1,6 +1,6 @@
 local Config = {
     Version = "v1.0.0",
-    Build = "TRACKER-012",
+    Build = "TRACKER-013",
     DefaultSpeed = 18,
     
     -- Scanner
@@ -9,6 +9,9 @@ local Config = {
     AutoStartTracker = true,
     CalibrationMode = false,
     MaterialPromptDistance = 100.0,
+    RemotePickupAssist = true,
+    RemotePickupMinDistance = 15.0,
+    RemotePickupKey = Enum.KeyCode.E,
     
     -- UI Colors & Dimensions
     Colors = {

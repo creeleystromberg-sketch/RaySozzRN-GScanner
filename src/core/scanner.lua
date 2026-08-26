@@ -412,6 +412,14 @@ local function collectPromptMetadata(prompt, model, part)
     return values, localContainer
 end
 
+local function enforcePromptRange(prompt)
+    if not prompt or not prompt.Parent then return end
+    pcall(function()
+        local distance = (Config and Config.MaterialPromptDistance) or 100
+        prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, distance)
+    end)
+end
+
 function Scanner.Identify(prompt, allowDisabled)
     if not prompt or not prompt:IsA("ProximityPrompt")
         or (not allowDisabled and not prompt.Enabled) or isBlacklisted(prompt) then
@@ -423,12 +431,7 @@ function Scanner.Identify(prompt, allowDisabled)
     if not isCollectionInteraction(prompt) then return nil, nil, nil end
 
     local function identified(name, biome)
-        if not allowDisabled then
-            pcall(function()
-                local distance = (Config and Config.MaterialPromptDistance) or 100
-                prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, distance)
-            end)
-        end
+        enforcePromptRange(prompt)
         return name, biome, part
     end
 
@@ -604,8 +607,13 @@ function Scanner.Scan(forceFull)
     lastScanError = nil
     for prompt in pairs(knownPrompts) do
         local ok, promptError = pcall(function()
-            if not prompt.Parent or not prompt.Enabled then
+            if not prompt.Parent then
                 knownPrompts[prompt], cachedPrompts[prompt] = nil, nil
+            elseif not prompt.Enabled then
+                -- Collection prompts are often disabled briefly while an item is
+                -- being respawned. Keep tracking the instance so it is picked up
+                -- again immediately when the game enables it.
+                cachedPrompts[prompt] = nil
             else
                 local cached = cachedPrompts[prompt]
                 if cached and not cached.ignored and (not cached.part or not cached.part.Parent) then cached = nil end
@@ -619,6 +627,9 @@ function Scanner.Scan(forceFull)
                     cachedPrompts[prompt] = cached
                 end
                 if cached and not cached.ignored then
+                    -- Some game scripts restore this property to the default.
+                    -- Re-apply it on every fast scan, but only to verified items.
+                    enforcePromptRange(prompt)
                     entries[#entries + 1] = {
                         prompt = prompt,
                         model = prompt:FindFirstAncestorOfClass("Model") or prompt.Parent,
@@ -638,6 +649,59 @@ function Scanner.Scan(forceFull)
     table.sort(entries, function(a, b) return a.distance < b.distance end)
     scannedEntries = entries
     return entries
+end
+
+function Scanner.TryPickupNearest()
+    if not Config or Config.RemotePickupAssist == false then
+        return false, "Pickup assist is disabled"
+    end
+
+    local root = Movement and Movement.GetRoot()
+    if not root then return false, "HumanoidRootPart is unavailable" end
+
+    local ok = pcall(Scanner.Scan)
+    if not ok then return false, "Material scan failed" end
+
+    local nearest = scannedEntries[1]
+    if not nearest or not nearest.prompt or not nearest.prompt.Parent or not nearest.prompt.Enabled then
+        return false, "No material prompt is available"
+    end
+
+    local distance = (root.Position - nearest.part.Position).Magnitude
+    local maximum = Config.MaterialPromptDistance or 100
+    local normalRange = Config.RemotePickupMinDistance or 15
+    if distance > maximum then return false, "Nearest material is out of range" end
+    if distance <= normalRange then return false, "Use the normal prompt" end
+
+    enforcePromptRange(nearest.prompt)
+
+    local firePrompt = nil
+    pcall(function()
+        local executorEnvironment = getgenv and getgenv() or _G
+        firePrompt = executorEnvironment and executorEnvironment.fireproximityprompt
+        if type(firePrompt) ~= "function" and type(fireproximityprompt) == "function" then
+            firePrompt = fireproximityprompt
+        end
+    end)
+
+    if type(firePrompt) == "function" then
+        local fired, fireError = pcall(firePrompt, nearest.prompt, 0)
+        if not fired then return false, tostring(fireError) end
+    else
+        -- Official fallback. Games can still enforce their own server distance,
+        -- so executor support is preferred for interactions beyond that limit.
+        local fired, fireError = pcall(function()
+            nearest.prompt:InputHoldBegin()
+            task.delay(math.max(nearest.prompt.HoldDuration, 0.05), function()
+                if nearest.prompt and nearest.prompt.Parent then
+                    pcall(function() nearest.prompt:InputHoldEnd() end)
+                end
+            end)
+        end)
+        if not fired then return false, tostring(fireError) end
+    end
+
+    return true, string.format("%s — %.0f studs", nearest.name, distance)
 end
 
 function Scanner.GetEntries()
