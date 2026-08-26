@@ -75,6 +75,27 @@ local function normalizeWords(value)
 end
 
 function Database.Classify(values)
+    if Database.BroadMode then
+        local broadScores = {}
+        for material in pairs(Database.Materials) do broadScores[material] = 0 end
+        for _, value in ipairs(values or {}) do
+            local text = string.lower(tostring(value or ""))
+            for material, signatures in pairs(rules) do
+                for _, signature in ipairs(signatures) do
+                    if string.find(text, string.lower(signature[1]), 1, true) then
+                        broadScores[material] += signature[2]
+                    end
+                end
+            end
+        end
+        local broadName, broadScore = nil, 0
+        for material, score in pairs(broadScores) do
+            if score > broadScore then broadName, broadScore = material, score end
+        end
+        if not broadName or broadScore < 10 then return nil, nil, 0 end
+        return broadName, Database.Materials[broadName].Biome, broadScore
+    end
+
     local scores = {}
     for material in pairs(Database.Materials) do scores[material] = 0 end
 

@@ -61,8 +61,10 @@ function UI.Init(deps)
         Visuals.Clear()
         Scanner.Invalidate()
         task.defer(function()
-            local entries = Scanner.Scan()
-            if trackerEnabled and gui and gui.Parent then Visuals.Update(entries, gui) end
+            local ok, entries = pcall(Scanner.Scan)
+            if ok and trackerEnabled and gui and gui.Parent then
+                pcall(Visuals.Update, entries, gui)
+            end
         end)
     end)
 
@@ -530,12 +532,20 @@ function UI.BuildMain()
             if trackerEnabled then
                 local ok, entries = pcall(Scanner.Scan)
                 if ok then
-                    Visuals.Update(entries, gui)
-                    UI.RefreshMaterialRows(entries, matList, emptyLabel)
+                    local renderOk, renderError = pcall(function()
+                        Visuals.Update(entries, gui)
+                        UI.RefreshMaterialRows(entries, matList, emptyLabel)
+                    end)
                     local mode = Config.CalibrationMode and " — broad calibration mode" or ""
-                    navStatus.Text = "Tracker active" .. mode .. "\nFound: " .. #entries .. "\nFull refresh every 15 seconds."
+                    local scanWarning = Scanner.GetLastError and Scanner.GetLastError() or nil
+                    if renderOk then
+                        navStatus.Text = "Tracker active" .. mode .. "\nFound: " .. #entries
+                            .. (scanWarning and ("\nSkipped error: " .. scanWarning) or "\nFull refresh every 15 seconds.")
+                    else
+                        navStatus.Text = "Visual update error: " .. tostring(renderError)
+                    end
                 else
-                    navStatus.Text = "Tracker retrying after scan error."
+                    navStatus.Text = "Scan error: " .. tostring(entries)
                 end
             end
             task.wait(Config.ScanInterval or 2.0)

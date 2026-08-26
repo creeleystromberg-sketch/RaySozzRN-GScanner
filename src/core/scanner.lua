@@ -6,6 +6,7 @@ local Database, Movement, Config
 local knownPrompts, cachedPrompts, scannedEntries = {}, {}, {}
 local connections = {}
 local lastFullScan = 0
+local lastScanError = nil
 
 local function usesBroadDetection()
     return Config and Config.CalibrationMode == true
@@ -63,18 +64,28 @@ end
 local function appendMetadata(values, instance)
     if not instance then return end
     values[#values + 1] = instance.Name
-    if instance:IsA("StringValue") then values[#values + 1] = instance.Value end
+    local function appendProperty(read)
+        local ok, value = pcall(read)
+        if ok and value ~= nil then values[#values + 1] = value end
+    end
+    if instance:IsA("StringValue") then appendProperty(function() return instance.Value end) end
     if instance:IsA("MeshPart") then
-        values[#values + 1] = instance.MeshId
-        values[#values + 1] = instance.TextureID
+        appendProperty(function() return instance.MeshId end)
+        appendProperty(function() return instance.TextureID end)
     elseif instance:IsA("ParticleEmitter") or instance:IsA("Decal") or instance:IsA("Texture") then
-        values[#values + 1] = instance.Texture
+        appendProperty(function() return instance.Texture end)
     end
-    for attributeName, attributeValue in pairs(instance:GetAttributes()) do
-        values[#values + 1] = attributeName
-        values[#values + 1] = attributeValue
+    local attributesOk, attributes = pcall(function() return instance:GetAttributes() end)
+    if attributesOk then
+        for attributeName, attributeValue in pairs(attributes) do
+            values[#values + 1] = attributeName
+            values[#values + 1] = attributeValue
+        end
     end
-    for _, tag in ipairs(CollectionService:GetTags(instance)) do values[#values + 1] = tag end
+    local tagsOk, tags = pcall(function() return CollectionService:GetTags(instance) end)
+    if tagsOk then
+        for _, tag in ipairs(tags) do values[#values + 1] = tag end
+    end
 end
 
 local function appearanceContainer(prompt, model)
@@ -99,7 +110,7 @@ local function appearanceContainer(prompt, model)
                 if promptCount > 1 then break end
             end
         end
-        if promptCount <= 1 and #descendants <= 80 then return model end
+        if promptCount <= 1 and (usesBroadDetection() or #descendants <= 80) then return model end
     end
     return resolvePart(prompt, model) or prompt.Parent
 end
@@ -534,6 +545,7 @@ end
 
 function Scanner.Init(deps)
     Database, Movement, Config = deps.Database, deps.Movement, deps.Config
+    Database.BroadMode = Config and Config.CalibrationMode == true
     for _, connection in ipairs(connections) do connection:Disconnect() end
     connections = {
         Workspace.DescendantAdded:Connect(register),
@@ -543,6 +555,8 @@ function Scanner.Init(deps)
             end
         end),
     }
+    local ok, scanError = pcall(Scanner.FullRescan)
+    if not ok then lastScanError = tostring(scanError) end
 end
 
 function Scanner.Invalidate()
@@ -552,36 +566,46 @@ end
 
 function Scanner.Scan(forceFull)
     local root = Movement and Movement.GetRoot()
-    if not root then return {} end
+    if not root then
+        lastScanError = "HumanoidRootPart is unavailable"
+        return {}
+    end
     local interval = (Config and Config.FullRescanInterval) or 15
     if forceFull or lastFullScan == 0 or os.clock() - lastFullScan >= interval then Scanner.FullRescan() end
 
     local entries = {}
+    lastScanError = nil
     for prompt in pairs(knownPrompts) do
-        if not prompt.Parent or not prompt.Enabled then
-            knownPrompts[prompt], cachedPrompts[prompt] = nil, nil
-        else
-            local cached = cachedPrompts[prompt]
-            if cached and not cached.ignored and (not cached.part or not cached.part.Parent) then cached = nil end
-            if not cached then
-                local name, biome, part = Scanner.Identify(prompt)
-                if name and biome and part then
-                    cached = { name = name, biome = biome, part = part }
-                else
-                    cached = { ignored = true }
+        local ok, promptError = pcall(function()
+            if not prompt.Parent or not prompt.Enabled then
+                knownPrompts[prompt], cachedPrompts[prompt] = nil, nil
+            else
+                local cached = cachedPrompts[prompt]
+                if cached and not cached.ignored and (not cached.part or not cached.part.Parent) then cached = nil end
+                if not cached then
+                    local name, biome, part = Scanner.Identify(prompt)
+                    if name and biome and part then
+                        cached = { name = name, biome = biome, part = part }
+                    else
+                        cached = { ignored = true }
+                    end
+                    cachedPrompts[prompt] = cached
                 end
-                cachedPrompts[prompt] = cached
+                if cached and not cached.ignored then
+                    entries[#entries + 1] = {
+                        prompt = prompt,
+                        model = prompt:FindFirstAncestorOfClass("Model") or prompt.Parent,
+                        part = cached.part,
+                        name = cached.name,
+                        biome = cached.biome,
+                        distance = (root.Position - cached.part.Position).Magnitude,
+                    }
+                end
             end
-            if cached and not cached.ignored then
-                entries[#entries + 1] = {
-                    prompt = prompt,
-                    model = prompt:FindFirstAncestorOfClass("Model") or prompt.Parent,
-                    part = cached.part,
-                    name = cached.name,
-                    biome = cached.biome,
-                    distance = (root.Position - cached.part.Position).Magnitude,
-                }
-            end
+        end)
+        if not ok then
+            lastScanError = tostring(promptError)
+            cachedPrompts[prompt] = nil
         end
     end
     table.sort(entries, function(a, b) return a.distance < b.distance end)
@@ -591,6 +615,10 @@ end
 
 function Scanner.GetEntries()
     return scannedEntries
+end
+
+function Scanner.GetLastError()
+    return lastScanError
 end
 
 function Scanner.Destroy()
